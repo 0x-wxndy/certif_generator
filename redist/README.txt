@@ -36,3 +36,15 @@ Livraison recommandée
   - Dire à l'utilisateur de lancer install_redist.bat une fois,
     puis GenerateurCertificats.exe
 
+Si la fenêtre native échoue (pythonnet / Python.Runtime.dll)
+-----------------------------------------------------------
+  Cause fréquente: Windows marque les fichiers copiés/ZIP comme
+  provenant d'un autre PC (Mark-of-the-Web).
+
+  Sur le PC cible:
+    1. Lancez debloquer_dll.bat (dans GenerateurCertificats\)
+       OU clic droit sur le ZIP → Propriétés → Débloquer → OK
+    2. Relancez GenerateurCertificats.exe
+  L'app ouvrira le navigateur en secours si la fenêtre native échoue.
+  Installez aussi WebView2 Runtime (Edge) si besoin.
+

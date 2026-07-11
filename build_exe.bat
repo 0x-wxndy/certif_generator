@@ -136,7 +136,7 @@ if exist dist (
 echo.
 echo [4/4] Construction PyInstaller...
 echo       (plusieurs minutes - laissez tourner)
-".venv\Scripts\pyinstaller.exe" --noconfirm --clean --name GenerateurCertificats --onedir --windowed --add-data "certificate_ui.py;." --add-data "certificate_generator.py;." --add-data "requirements.txt;." --add-data ".streamlit;.streamlit" --add-data "assets;assets" --add-data "fonts;fonts" --add-data "certificates templates;certificates templates" --add-data "bulk_templates;bulk_templates" --hidden-import streamlit --hidden-import streamlit.web.cli --hidden-import streamlit.web.bootstrap --hidden-import streamlit.runtime.scriptrunner.magic_funcs --hidden-import webview --hidden-import docx --hidden-import docxtpl --hidden-import openpyxl --hidden-import fitz --hidden-import arabic_reshaper --hidden-import bidi --collect-all streamlit --collect-all altair --collect-all webview --collect-all docxtpl --collect-all arabic_reshaper run_desktop.py
+".venv\Scripts\pyinstaller.exe" --noconfirm --clean --name GenerateurCertificats --onedir --windowed --add-data "certificate_ui.py;." --add-data "certificate_generator.py;." --add-data "requirements.txt;." --add-data ".streamlit;.streamlit" --add-data "assets;assets" --add-data "fonts;fonts" --add-data "certificates templates;certificates templates" --add-data "bulk_templates;bulk_templates" --hidden-import streamlit --hidden-import streamlit.web.cli --hidden-import streamlit.web.bootstrap --hidden-import streamlit.runtime.scriptrunner.magic_funcs --hidden-import webview --hidden-import clr --hidden-import clr_loader --hidden-import pythonnet --hidden-import docx --hidden-import docxtpl --hidden-import openpyxl --hidden-import fitz --hidden-import arabic_reshaper --hidden-import bidi --collect-all streamlit --collect-all altair --collect-all webview --collect-all pythonnet --collect-all clr_loader --collect-all docxtpl --collect-all arabic_reshaper run_desktop.py
 if errorlevel 1 (
   echo.
   echo [ERREUR] PyInstaller a echoue
@@ -150,16 +150,25 @@ if errorlevel 1 (
   exit /b 1
 )
 
+REM Clear Mark-of-the-Web on the fresh build (helps target PCs after copy).
+powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "Get-ChildItem -LiteralPath 'dist\GenerateurCertificats' -Recurse -Include *.dll,*.exe -ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue" >nul 2>nul
+
 if not exist "dist\GenerateurCertificats\GenerateurCertificats.exe" (
   echo [ERREUR] EXE introuvable dans dist\GenerateurCertificats\
   pause
   exit /b 1
 )
 
+copy /Y "debloquer_dll.bat" "dist\GenerateurCertificats\debloquer_dll.bat" >nul 2>nul
+
 echo.
 echo ============================================================
 echo  OK
 echo  Lancez: dist\GenerateurCertificats\GenerateurCertificats.exe
+echo.
+echo  Sur un autre PC apres copie/ZIP:
+echo    1) debloquer_dll.bat  (une fois)
+echo    2) GenerateurCertificats.exe
 echo ============================================================
 echo.
 explorer "dist\GenerateurCertificats"

@@ -192,7 +192,65 @@ def _run_streamlit_server(ui_script: Path, port: int) -> int:
         raise
 
 
+def _unblock_packaged_dlls() -> None:
+    """
+    Clear Windows Mark-of-the-Web (Zone.Identifier) on bundled DLLs.
+
+    Copied/zipped EXEs often fail to load pythonnet's Python.Runtime.dll with:
+    "Failed to resolve Python.Runtime.Loader.Initialize".
+    """
+    if os.name != "nt" or not _is_frozen():
+        return
+
+    roots = {
+        _exe_dir(),
+        Path(getattr(sys, "_MEIPASS", _exe_dir())),
+        _exe_dir() / "_internal",
+    }
+    for root in roots:
+        if not root.exists():
+            continue
+        try:
+            # Fast path: unblock the whole package tree once.
+            _run = subprocess.run
+            _run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-WindowStyle",
+                    "Hidden",
+                    "-Command",
+                    f'Get-ChildItem -LiteralPath "{root}" -Recurse -Include *.dll,*.exe '
+                    f"-ErrorAction SilentlyContinue | Unblock-File -ErrorAction SilentlyContinue",
+                ],
+                capture_output=True,
+                check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception as exc:
+            _log(f"Unblock-File skipped for {root}: {exc}")
+
+
+def _prepare_pythonnet_runtime() -> None:
+    """Prefer .NET Core for pythonnet when available (more reliable when frozen)."""
+    if os.name != "nt":
+        return
+    try:
+        from pythonnet import set_runtime
+        from clr_loader import get_coreclr
+
+        set_runtime(get_coreclr())
+        _log("pythonnet runtime: coreclr")
+    except Exception as exc:
+        _log(f"pythonnet coreclr unavailable, using default: {exc}")
+
+
 def _open_desktop_window(port: int) -> bool:
+    _unblock_packaged_dlls()
+    _prepare_pythonnet_runtime()
+
     try:
         import webview
     except ImportError:
@@ -201,17 +259,21 @@ def _open_desktop_window(port: int) -> bool:
 
     url = f"http://127.0.0.1:{port}"
     _log(f"Opening desktop window: {url}")
-    # Streamlit download_button needs this — disabled by default in pywebview.
-    webview.settings["ALLOW_DOWNLOADS"] = True
-    webview.create_window(
-        title="وزارة العدل — Générateur de certificats",
-        url=url,
-        width=1360,
-        height=900,
-        min_size=(960, 640),
-    )
-    webview.start()
-    return True
+    try:
+        # Streamlit download_button needs this — disabled by default in pywebview.
+        webview.settings["ALLOW_DOWNLOADS"] = True
+        webview.create_window(
+            title="وزارة العدل — Générateur de certificats",
+            url=url,
+            width=1360,
+            height=900,
+            min_size=(960, 640),
+        )
+        webview.start()
+        return True
+    except Exception:
+        _log("pywebview failed:\n" + traceback.format_exc())
+        return False
 
 
 def _spawn_streamlit_child(ui_script: Path, port: int) -> subprocess.Popen:
@@ -354,14 +416,38 @@ def main() -> int:
                 return 1
             _log("Streamlit app is ready")
 
-        if not _open_desktop_window(port):
-            webbrowser.open(f"http://127.0.0.1:{port}")
-            _log("Opened system browser (no pywebview)")
+        opened = False
+        try:
+            opened = _open_desktop_window(port)
+        except Exception:
+            _log("desktop window raised:\n" + traceback.format_exc())
+            opened = False
+
+        if not opened:
+            url = f"http://127.0.0.1:{port}"
+            webbrowser.open(url)
+            _log(f"Opened system browser fallback: {url}")
+            if os.name == "nt":
+                try:
+                    import ctypes
+
+                    ctypes.windll.user32.MessageBoxW(
+                        0,
+                        "La fenêtre intégrée n'a pas pu démarrer (pythonnet / WebView).\n\n"
+                        "L'application s'ouvre dans le navigateur à la place.\n\n"
+                        "Astuce livraison: après copie/ZIP, clic droit sur le dossier "
+                        "ou le ZIP → Propriétés → Débloquer, puis réessayez.\n"
+                        "Installez aussi « WebView2 Runtime » et VC++ Redistributable.",
+                        "Générateur de certificats",
+                        0x40,
+                    )
+                except Exception:
+                    pass
             if child is not None:
                 return int(child.wait() or 0)
             _show_error(
-                "pywebview est manquant.\n"
-                "Réinstallez les dépendances puis reconstruisez l'EXE."
+                "Impossible d'ouvrir l'interface.\n"
+                "Vérifiez generateur_certificats.log"
             )
             return 1
 
