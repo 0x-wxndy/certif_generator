@@ -10,6 +10,13 @@ Contenu attendu
   VC_redist.x64.exe            Visual C++ Redistributable
   LibreOffice_*_Win_x86-64.msi LibreOffice (aperçu / conversion PDF)
 
+Conversion PDF
+--------------
+  Sur Windows, l'app utilise d'abord Microsoft Word s'il est installé
+  (plus rapide), sinon LibreOffice.
+  Word n'est PAS livré dans redist\ — LibreOffice reste recommandé
+  pour les PC sans Office.
+
 Comment remplir ce dossier
 --------------------------
   Double-cliquez :  download_redist.bat

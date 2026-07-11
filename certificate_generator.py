@@ -426,7 +426,7 @@ def _distribute_appreciation_layout(doc: Document) -> None:
             if parent is not None:
                 parent.remove(el)
 
-    # Insert spacers just before the title to shift the whole lower block down.
+    # Insert a modest spacer before the title (slightly higher than previous push).
     title_el = None
     for paragraph in doc.paragraphs:
         if paragraph.text.strip().startswith("شهادة"):
@@ -434,8 +434,7 @@ def _distribute_appreciation_layout(doc: Document) -> None:
             break
     if title_el is not None and title_el.getparent() is not None:
         parent = title_el.getparent()
-        for _ in range(3):
-            parent.insert(parent.index(title_el), _make_spacer(120, 120))
+        parent.insert(parent.index(title_el), _make_spacer(90, 90))
 
     title_seen = False
     for paragraph in doc.paragraphs:
@@ -444,8 +443,8 @@ def _distribute_appreciation_layout(doc: Document) -> None:
 
         if text.startswith("شهادة"):
             title_seen = True
-            sp.set(qn("w:before"), "160")
-            sp.set(qn("w:after"), "120")
+            sp.set(qn("w:before"), "120")
+            sp.set(qn("w:after"), "100")
             sp.set(qn("w:line"), "260")
             sp.set(qn("w:lineRule"), "auto")
             continue
@@ -454,31 +453,31 @@ def _distribute_appreciation_layout(doc: Document) -> None:
             continue
 
         if text.startswith("◆"):
-            sp.set(qn("w:before"), "100")
-            sp.set(qn("w:after"), "120")
+            sp.set(qn("w:before"), "80")
+            sp.set(qn("w:after"), "100")
         elif text.startswith("السيد"):
-            sp.set(qn("w:before"), "140")
-            sp.set(qn("w:after"), "140")
+            sp.set(qn("w:before"), "120")
+            sp.set(qn("w:after"), "120")
             sp.set(qn("w:line"), "280")
             sp.set(qn("w:lineRule"), "auto")
         elif text.startswith("تقديرا") or text.startswith("المنجزة"):
-            sp.set(qn("w:before"), "90")
-            sp.set(qn("w:after"), "90")
+            sp.set(qn("w:before"), "80")
+            sp.set(qn("w:after"), "80")
             sp.set(qn("w:line"), "280")
             sp.set(qn("w:lineRule"), "auto")
         elif "ختم" in text:
-            sp.set(qn("w:before"), "160")
-            sp.set(qn("w:after"), "100")
+            sp.set(qn("w:before"), "120")
+            sp.set(qn("w:after"), "80")
         elif text == "التوقيع":
-            sp.set(qn("w:before"), "80")
+            sp.set(qn("w:before"), "60")
             sp.set(qn("w:after"), "40")
         elif not text:
-            sp.set(qn("w:before"), "100")
-            sp.set(qn("w:after"), "100")
+            sp.set(qn("w:before"), "80")
+            sp.set(qn("w:after"), "80")
 
     section = doc.sections[0]
-    section.bottom_margin = Cm(0.55)
-    section.top_margin = Cm(0.7)
+    section.bottom_margin = Cm(0.7)
+    section.top_margin = Cm(0.8)
 
 
 def _enlarge_congratulations_fields(doc: Document, recipient_title: str, council_location: str) -> None:
@@ -1287,19 +1286,182 @@ def _terminate_libreoffice_processes() -> None:
     subprocess.run(["pkill", "-9", "libreoffice"], capture_output=True, check=False)
 
 
-def docx_to_pdf_bytes(docx_path: str | Path) -> bytes:
-    """Convert a DOCX to PDF bytes via LibreOffice.
+def _prepare_docx_copy_for_pdf(work_docx: Path) -> None:
+    """Cheap italic-Arabic fix only when needed (avoids slow full rewrite)."""
+    try:
+        doc = Document(str(work_docx))
+        changed = False
+        for paragraph in _iter_paragraphs(doc):
+            for run in paragraph.runs:
+                if not run.text or not _contains_arabic(run.text):
+                    continue
+                if not _run_is_italic(run):
+                    continue
+                _strip_run_italic(run)
+                _set_run_font(run, _best_arabic_font(), size_scale=0.9)
+                changed = True
+        if changed:
+            doc.save(str(work_docx))
+    except Exception:
+        pass
 
-    Optimizations:
-    - Disk cache keyed by source mtime (instant on repeat)
-    - Persistent LibreOffice user profile (avoids cold-start every call)
-    - Light italic-Arabic patch only (no full font remap)
-    - Hidden subprocesses on Windows (no CMD spam)
+
+def _docx_to_pdf_msword(work_docx: Path, pdf_path: Path) -> bytes:
+    """
+    Convert via Microsoft Word COM (Windows). Usually much faster than LibreOffice
+    when Word is installed, and preserves Arabic layout well.
+    """
+    import os
+    import subprocess
+    import tempfile
+
+    if os.name != "nt":
+        raise RuntimeError("Microsoft Word conversion is Windows-only")
+
+    # ASCII-safe temp names avoid PowerShell encoding issues with Arabic paths.
+    with tempfile.TemporaryDirectory(prefix="cert_word_") as tmp:
+        tmp_dir = Path(tmp)
+        safe_docx = tmp_dir / "input.docx"
+        safe_pdf = tmp_dir / "output.pdf"
+        safe_docx.write_bytes(work_docx.read_bytes())
+
+        # Prefer pywin32 when available (no PowerShell spawn).
+        try:
+            import win32com.client  # type: ignore
+
+            word = win32com.client.DispatchEx("Word.Application")
+            word.Visible = False
+            word.DisplayAlerts = 0
+            try:
+                document = word.Documents.Open(str(safe_docx), ReadOnly=True)
+                # 17 = wdExportFormatPDF
+                document.ExportAsFixedFormat(str(safe_pdf), 17)
+                document.Close(False)
+            finally:
+                word.Quit()
+        except Exception:
+            docx_ps = str(safe_docx).replace("'", "''")
+            pdf_ps = str(safe_pdf).replace("'", "''")
+            script = f"""
+$ErrorActionPreference = 'Stop'
+$word = New-Object -ComObject Word.Application
+$word.Visible = $false
+$word.DisplayAlerts = 0
+try {{
+  $doc = $word.Documents.Open('{docx_ps}', $false, $true)
+  $doc.ExportAsFixedFormat('{pdf_ps}', 17)
+  $doc.Close($false)
+}} finally {{
+  $word.Quit() | Out-Null
+}}
+"""
+            result = _run_hidden(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-WindowStyle",
+                    "Hidden",
+                    "-Command",
+                    script,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=90,
+                check=False,
+            )
+            if result.returncode != 0 or not safe_pdf.exists():
+                detail = (result.stderr or result.stdout or "").strip()
+                raise RuntimeError(detail or "Word COM conversion failed")
+
+        if not safe_pdf.exists() or safe_pdf.stat().st_size <= 0:
+            raise RuntimeError("Word n'a pas produit de PDF")
+        pdf_bytes = safe_pdf.read_bytes()
+        pdf_path.write_bytes(pdf_bytes)
+        return pdf_bytes
+
+
+def _docx_to_pdf_libreoffice(work_docx: Path, pdf_path: Path) -> bytes:
+    """LibreOffice headless conversion (fallback / non-Windows)."""
+    import os
+    import subprocess
+    import time
+
+    fonts_dir = BASE_DIR / "fonts"
+    env = os.environ.copy()
+    if fonts_dir.exists():
+        existing = env.get("SAL_FONTPATH", "")
+        env["SAL_FONTPATH"] = str(fonts_dir) if not existing else f"{fonts_dir}{os.pathsep}{existing}"
+    env.setdefault("SAL_NO_NAG_DIALOGS", "1")
+
+    soffice = _libreoffice_command()
+    profile_root = WRITE_DIR / ".lo_user_profile"
+    profile_root.mkdir(parents=True, exist_ok=True)
+    profile_uri = profile_root.resolve().as_uri()
+    out_dir = pdf_path.parent
+
+    cmd = [
+        soffice,
+        "--headless",
+        "--invisible",
+        "--nologo",
+        "--norestore",
+        "--nofirststartwizard",
+        "--nolockcheck",
+        f"-env:UserInstallation={profile_uri}",
+        "--convert-to",
+        "pdf:writer_pdf_Export",
+        "--outdir",
+        str(out_dir),
+        str(work_docx.resolve()),
+    ]
+    run_kwargs: dict = {
+        "capture_output": True,
+        "text": True,
+        "timeout": 90,
+        "check": False,
+        "env": env,
+        "cwd": str(out_dir),
+    }
+
+    last_error = ""
+    for attempt in range(2):
+        try:
+            result = _run_hidden(cmd, **run_kwargs)
+        except subprocess.TimeoutExpired:
+            _terminate_libreoffice_processes()
+            last_error = "LibreOffice a dépassé le délai (90 s)"
+            if attempt == 0:
+                time.sleep(0.3)
+                continue
+            raise RuntimeError(last_error) from None
+
+        produced = out_dir / f"{work_docx.stem}.pdf"
+        if result.returncode == 0 and produced.exists():
+            if produced != pdf_path:
+                pdf_path.write_bytes(produced.read_bytes())
+            return pdf_path.read_bytes()
+
+        last_error = (result.stderr or result.stdout or "").strip()
+        if attempt == 0:
+            _terminate_libreoffice_processes()
+            time.sleep(0.3)
+
+    raise RuntimeError(last_error or "LibreOffice error")
+
+
+def docx_to_pdf_bytes(docx_path: str | Path) -> bytes:
+    """Convert DOCX → PDF.
+
+    Backend order:
+    1. Disk cache (instant)
+    2. Microsoft Word on Windows when available (usually faster + faithful)
+    3. LibreOffice headless (fallback / Linux)
     """
     import os
     import shutil
     import tempfile
-    import time
 
     docx_path = Path(docx_path)
     if not docx_path.exists():
@@ -1311,91 +1473,41 @@ def docx_to_pdf_bytes(docx_path: str | Path) -> bytes:
     if cache_pdf.exists() and cache_pdf.stat().st_size > 0:
         return cache_pdf.read_bytes()
 
-    fonts_dir = BASE_DIR / "fonts"
-    env = os.environ.copy()
-    if fonts_dir.exists():
-        existing = env.get("SAL_FONTPATH", "")
-        env["SAL_FONTPATH"] = str(fonts_dir) if not existing else f"{fonts_dir}{os.pathsep}{existing}"
-    env.setdefault("SAL_NO_NAG_DIALOGS", "1")
-
-    soffice = _libreoffice_command()
-    # Reuse one profile — creating a fresh profile each convert is the main slowdown.
-    profile_root = WRITE_DIR / ".lo_user_profile"
-    profile_root.mkdir(parents=True, exist_ok=True)
-    profile_uri = profile_root.resolve().as_uri()
-
+    errors: list[str] = []
     with tempfile.TemporaryDirectory(prefix="cert_pdf_") as tmp:
         tmp_dir = Path(tmp)
-        work_docx = tmp_dir / docx_path.name
+        work_docx = tmp_dir / "source.docx"
         shutil.copy2(docx_path, work_docx)
-        # Cheap tofu fix: only italic Arabic runs (body Arial stays as-is).
-        try:
-            doc = Document(str(work_docx))
-            _fix_arabic_pdf_fonts(doc, size_scale=0.9)
-            doc.save(str(work_docx))
-        except Exception:
-            pass
+        _prepare_docx_copy_for_pdf(work_docx)
+        out_pdf = tmp_dir / "source.pdf"
 
-        cmd = [
-            soffice,
-            "--headless",
-            "--invisible",
-            "--nologo",
-            "--norestore",
-            "--nofirststartwizard",
-            "--nolockcheck",
-            f"-env:UserInstallation={profile_uri}",
-            "--convert-to",
-            "pdf:writer_pdf_Export",
-            "--outdir",
-            str(tmp_dir),
-            str(work_docx.resolve()),
-        ]
-
-        import subprocess
-
-        run_kwargs: dict = {
-            "capture_output": True,
-            "text": True,
-            "timeout": 120,
-            "check": False,
-            "env": env,
-            "cwd": str(tmp_dir),
-        }
-
-        last_error = ""
-        for attempt in range(2):
+        if os.name == "nt":
             try:
-                result = _run_hidden(cmd, **run_kwargs)
-            except subprocess.TimeoutExpired:
-                _terminate_libreoffice_processes()
-                last_error = "LibreOffice a dépassé le délai (120 s)"
-                if attempt == 0:
-                    time.sleep(0.4)
-                    continue
-                raise RuntimeError(
-                    "Conversion DOCX → PDF échouée : délai dépassé. "
-                    "Fermez LibreOffice s'il est ouvert, puis réessayez."
-                ) from None
-
-            pdf_path = tmp_dir / f"{work_docx.stem}.pdf"
-            if result.returncode == 0 and pdf_path.exists():
-                pdf_bytes = pdf_path.read_bytes()
+                pdf_bytes = _docx_to_pdf_msword(work_docx, out_pdf)
                 try:
                     cache_pdf.write_bytes(pdf_bytes)
                 except OSError:
                     pass
                 return pdf_bytes
+            except Exception as exc:
+                errors.append(f"Word: {exc}")
 
-            last_error = (result.stderr or result.stdout or "").strip()
-            if attempt == 0:
-                _terminate_libreoffice_processes()
-                time.sleep(0.4)
-                continue
+        try:
+            pdf_bytes = _docx_to_pdf_libreoffice(work_docx, out_pdf)
+            try:
+                cache_pdf.write_bytes(pdf_bytes)
+            except OSError:
+                pass
+            return pdf_bytes
+        except Exception as exc:
+            errors.append(f"LibreOffice: {exc}")
 
-        raise RuntimeError(
-            f"Conversion DOCX → PDF échouée: {last_error or 'LibreOffice error'}"
-        )
+    detail = " | ".join(errors) if errors else "aucun moteur PDF"
+    raise RuntimeError(
+        "Conversion DOCX → PDF échouée. "
+        "Installez Microsoft Word ou LibreOffice. "
+        f"({detail})"
+    )
 
 
 def pdf_bytes_to_png_bytes(pdf_bytes: bytes, zoom: float = 1.3) -> bytes:
