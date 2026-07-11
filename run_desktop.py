@@ -91,36 +91,81 @@ def _show_error(message: str) -> None:
         pass
 
 
+def _apply_streamlit_env(port: int) -> None:
+    """Force Streamlit settings via env (read before config parse)."""
+    os.environ["STREAMLIT_SERVER_PORT"] = str(port)
+    os.environ["STREAMLIT_SERVER_ADDRESS"] = "127.0.0.1"
+    os.environ["STREAMLIT_SERVER_HEADLESS"] = "true"
+    os.environ["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] = "false"
+    # Required for embedding inside pywebview (otherwise blank / Not Found).
+    os.environ["STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION"] = "false"
+    os.environ["STREAMLIT_SERVER_ENABLE_CORS"] = "false"
+    os.environ["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] = "none"
+    os.environ["STREAMLIT_GLOBAL_DEVELOPMENT_MODE"] = "false"
+
+
 def _streamlit_flag_options(port: int) -> dict:
+    # Underscore form is converted to dotted config keys by load_config_options.
     return {
-        "server.headless": True,
-        "server.address": "127.0.0.1",
-        "server.port": port,
-        "browser.gatherUsageStats": False,
-        "global.developmentMode": False,
-        "server.fileWatcherType": "none",
+        "server_port": port,
+        "server_address": "127.0.0.1",
+        "server_headless": True,
+        "browser_gatherUsageStats": False,
+        "global_developmentMode": False,
+        "server_fileWatcherType": "none",
+        "server_enableXsrfProtection": False,
+        "server_enableCORS": False,
     }
+
+
+def _http_app_ready(port: int) -> bool:
+    """True when Streamlit serves a real page (not plain 'Not Found')."""
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1.5) as resp:
+            body = resp.read(4096).decode("utf-8", errors="ignore")
+            if resp.status != 200:
+                return False
+            low = body.lower()
+            if "not found" == body.strip().lower():
+                return False
+            return ("streamlit" in low) or ("<!doctype html" in low) or ("<html" in low)
+    except Exception:
+        return False
+
+
+def _wait_for_app(port: int, timeout: float = 120.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _http_app_ready(port):
+            return True
+        time.sleep(0.5)
+    return False
 
 
 def _run_streamlit_server(ui_script: Path, port: int) -> int:
     """Blocking Streamlit server (used by the child process / source mode)."""
-    os.environ["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] = "false"
+    _apply_streamlit_env(port)
     _log(f"Starting Streamlit on 127.0.0.1:{port}")
     _log(f"UI script: {ui_script}")
 
-    # Prefer bootstrap API (more reliable under PyInstaller than rewriting sys.argv).
+    flag_options = _streamlit_flag_options(port)
+
+    # Prefer bootstrap API, but MUST call load_config_options first (cli does this).
     try:
         from streamlit.web import bootstrap
 
+        bootstrap.load_config_options(flag_options=flag_options)
         bootstrap.run(
             str(ui_script),
             is_hello=False,
             args=[],
-            flag_options=_streamlit_flag_options(port),
+            flag_options=flag_options,
         )
         return 0
     except TypeError:
-        # Older/newer Streamlit signature differences.
         pass
     except Exception:
         _log("bootstrap.run failed:\n" + traceback.format_exc())
@@ -132,12 +177,14 @@ def _run_streamlit_server(ui_script: Path, port: int) -> int:
             "streamlit",
             "run",
             str(ui_script),
-            "--server.headless=true",
-            "--server.address=127.0.0.1",
             f"--server.port={port}",
+            "--server.address=127.0.0.1",
+            "--server.headless=true",
             "--browser.gatherUsageStats=false",
             "--global.developmentMode=false",
             "--server.fileWatcherType=none",
+            "--server.enableXsrfProtection=false",
+            "--server.enableCORS=false",
         ]
         return int(stcli.main() or 0)
     except Exception:
@@ -149,7 +196,7 @@ def _open_desktop_window(port: int) -> bool:
     try:
         import webview
     except ImportError:
-        _log("pywebview not installed — falling back to browser")
+        _log("pywebview not installed - falling back to browser")
         return False
 
     url = f"http://127.0.0.1:{port}"
@@ -171,8 +218,14 @@ def _spawn_streamlit_child(ui_script: Path, port: int) -> subprocess.Popen:
     Avoids running Streamlit in a fragile background thread.
     """
     env = os.environ.copy()
-    env["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] = "false"
     env["CERT_APP_CHILD"] = "1"
+    env["STREAMLIT_SERVER_PORT"] = str(port)
+    env["STREAMLIT_SERVER_ADDRESS"] = "127.0.0.1"
+    env["STREAMLIT_SERVER_HEADLESS"] = "true"
+    env["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] = "false"
+    env["STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION"] = "false"
+    env["STREAMLIT_SERVER_ENABLE_CORS"] = "false"
+    env["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] = "none"
 
     if _is_frozen():
         cmd = [
@@ -191,7 +244,6 @@ def _spawn_streamlit_child(ui_script: Path, port: int) -> subprocess.Popen:
         ]
 
     _log("Spawning Streamlit child: " + " ".join(cmd))
-    # Hide child console on Windows.
     creationflags = 0
     startupinfo = None
     if os.name == "nt":
@@ -264,27 +316,40 @@ def main() -> int:
     child: subprocess.Popen | None = None
 
     try:
-        if _port_open(port):
-            _log(f"Port {port} already in use — reusing existing server")
+        if _port_open(port) and _http_app_ready(port):
+            _log(f"Port {port} already serving Streamlit — reusing")
         else:
+            if _port_open(port) and not _http_app_ready(port):
+                _log(
+                    f"Port {port} is occupied but not serving Streamlit. "
+                    "Close old GenerateurCertificats processes, then retry."
+                )
+                _show_error(
+                    f"Le port {port} est déjà utilisé par un ancien processus.\n"
+                    "Fermez GenerateurCertificats dans le Gestionnaire des tâches,\n"
+                    "puis relancez l'application."
+                )
+                return 1
+
             child = _spawn_streamlit_child(ui_script, port)
             import threading
 
             threading.Thread(target=_drain_child_log, args=(child,), daemon=True).start()
 
-            if not _wait_for_port(port, timeout=120):
+            # Wait until Streamlit returns a real HTML page (port open alone is not enough).
+            if not _wait_for_app(port, timeout=120):
                 extra = ""
                 if child.poll() is not None:
                     extra = f"\nLe processus serveur s'est arrêté (code {child.returncode})."
                 _show_error(
-                    "Le serveur n'a pas démarré à temps."
+                    "L'interface n'a pas démarré correctement."
                     f"{extra}\n\n"
                     "1) Fermez toute ancienne instance dans le Gestionnaire des tâches\n"
-                    "2) Vérifiez le fichier generateur_certificats.log\n"
-                    "3) Réessayez"
+                    "2) Vérifiez generateur_certificats.log\n"
+                    "3) Reconstruisez l'EXE avec build_exe.bat"
                 )
                 return 1
-            _log("Server is up")
+            _log("Streamlit app is ready")
 
         if not _open_desktop_window(port):
             webbrowser.open(f"http://127.0.0.1:{port}")
