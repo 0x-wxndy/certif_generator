@@ -198,22 +198,43 @@ def _unblock_packaged_dlls() -> None:
 
     Copied/zipped EXEs often fail to load pythonnet's Python.Runtime.dll with:
     "Failed to resolve Python.Runtime.Loader.Initialize".
+
+    Runs automatically at every launch — users must not run a separate script.
     """
     if os.name != "nt" or not _is_frozen():
         return
+
+    # Only once per process.
+    if getattr(_unblock_packaged_dlls, "_done", False):
+        return
+    _unblock_packaged_dlls._done = True  # type: ignore[attr-defined]
 
     roots = {
         _exe_dir(),
         Path(getattr(sys, "_MEIPASS", _exe_dir())),
         _exe_dir() / "_internal",
     }
+    # Also try removing Zone.Identifier streams directly (no PowerShell needed).
+    try:
+        for root in roots:
+            if not root.exists():
+                continue
+            for path in root.rglob("*"):
+                if path.suffix.lower() not in {".dll", ".exe"}:
+                    continue
+                zone = f"{path}:Zone.Identifier"
+                try:
+                    os.remove(zone)
+                except OSError:
+                    pass
+    except Exception as exc:
+        _log(f"Zone.Identifier cleanup skipped: {exc}")
+
     for root in roots:
         if not root.exists():
             continue
         try:
-            # Fast path: unblock the whole package tree once.
-            _run = subprocess.run
-            _run(
+            subprocess.run(
                 [
                     "powershell",
                     "-NoProfile",
@@ -229,6 +250,7 @@ def _unblock_packaged_dlls() -> None:
                 check=False,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
+            _log(f"Unblocked packaged files under: {root}")
         except Exception as exc:
             _log(f"Unblock-File skipped for {root}: {exc}")
 
@@ -480,6 +502,9 @@ def main() -> int:
     _log(f"Launcher start (frozen={_is_frozen()})")
     _log(f"exe_dir={workdir}")
     _log(f"app_root={root}")
+
+    # Always clear Mark-of-the-Web before loading anything else.
+    _unblock_packaged_dlls()
 
     port = int(os.environ.get("CERT_APP_PORT", "8501"))
     ui_script = (root / "certificate_ui.py").resolve()

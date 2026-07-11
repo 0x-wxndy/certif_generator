@@ -18,8 +18,8 @@ Prérequis (une fois par PC)
 
 Après copie / ZIP depuis un autre PC
 ------------------------------------
-  1. Lancez debloquer_dll.bat
-  2. Puis GenerateurCertificats.exe
+  Rien de spécial: GenerateurCertificats.exe débloque
+  automatiquement les DLL au démarrage.
 
 Fenêtre native (optionnel)
 --------------------------

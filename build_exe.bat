@@ -170,8 +170,8 @@ echo.
 echo  Mode par defaut: NAVIGATEUR (fiable sur tous les PC).
 echo  Sur un autre PC apres copie/ZIP:
 echo    1) redist\install_redist.bat
-echo    2) debloquer_dll.bat
-echo    3) GenerateurCertificats.exe
+echo    2) GenerateurCertificats.exe
+echo       (debloquage DLL automatique au lancement)
 echo ============================================================
 echo.
 explorer "dist\GenerateurCertificats"

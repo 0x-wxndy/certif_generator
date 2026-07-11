@@ -32,7 +32,8 @@ Livraison
   L'interface s'ouvre dans le NAVIGATEUR par défaut (mode fiable).
   Une boîte de dialogue reste ouverte : OK = fermer l'app.
 
-  Après copie/ZIP: lancez aussi debloquer_dll.bat une fois.
+  Après copie/ZIP: rien à faire — l'EXE débloque les DLL tout seul
+  au démarrage (plus besoin de debloquer_dll.bat).
 
 Conversion PDF
 --------------
