@@ -6,45 +6,65 @@ echo.
 echo  Build EXE - Generateur de certificats
 echo.
 
-where python >nul 2>nul
-if errorlevel 1 (
-  echo [ERREUR] Python introuvable dans le PATH.
-  echo Installez Python 3.11 ou 3.12 depuis https://www.python.org/downloads/
-  echo Cochez "Add python.exe to PATH".
+REM Prefer a stable Python for PyInstaller: 3.12 then 3.11
+set "PY_CMD="
+
+where py >nul 2>nul
+if not errorlevel 1 (
+  py -3.12 -c "import sys" >nul 2>nul
+  if not errorlevel 1 set "PY_CMD=py -3.12"
+  if not defined PY_CMD (
+    py -3.11 -c "import sys" >nul 2>nul
+    if not errorlevel 1 set "PY_CMD=py -3.11"
+  )
+)
+
+if not defined PY_CMD (
+  where python >nul 2>nul
+  if not errorlevel 1 (
+    python -c "import sys; v=sys.version_info; raise SystemExit(0 if (v.major,v.minor) in {(3,11),(3,12)} else 1)" >nul 2>nul
+    if not errorlevel 1 set "PY_CMD=python"
+  )
+)
+
+if not defined PY_CMD (
+  echo [ERREUR] Python 3.11 ou 3.12 introuvable.
+  echo.
+  echo Votre commande "python" pointe probablement vers 3.14, incompatible avec PyInstaller.
+  echo.
+  echo Solution:
+  echo   1) Installez Python 3.12 depuis:
+  echo      https://www.python.org/downloads/release/python-31210/
+  echo   2) Pendant l'install, cochez:
+  echo      - Add python.exe to PATH
+  echo      - Install launcher for all users  (py.exe)
+  echo   3) Ouvrez un NOUVEAU cmd et verifiez:
+  echo      py -3.12 --version
+  echo   4) Relancez build_exe.bat
+  echo.
+  echo Ou utilisez l'installateur deja present:
+  echo   redist\python-3.12.10-amd64.exe
+  echo   puis: redist\install_redist.bat /with-python
+  echo.
   pause
   exit /b 1
 )
 
-echo Python detecte:
-python --version
+echo Python utilise pour le build: %PY_CMD%
+%PY_CMD% --version
 echo.
 
-REM Prefer Python 3.11/3.12 - PyInstaller is unreliable on 3.13/3.14
-python -c "import sys; v=sys.version_info; raise SystemExit(0 if (v.major,v.minor) in {(3,11),(3,12)} else 1)"
-if errorlevel 1 (
-  echo [ERREUR] Ce build exige Python 3.11 ou 3.12.
-  echo Vous utilisez actuellement:
-  python --version
-  echo.
-  echo Installez Python 3.12, puis:
-  echo   rmdir /s /q .venv
-  echo   py -3.12 -m venv .venv
-  echo   build_exe.bat
-  pause
-  exit /b 1
-)
-
 if exist ".venv\Scripts\python.exe" (
-  ".venv\Scripts\python.exe" -c "import sys; v=sys.version_info; raise SystemExit(0 if (v.major,v.minor) in {(3,11),(3,12)} else 1)"
+  ".venv\Scripts\python.exe" -c "import sys; v=sys.version_info; raise SystemExit(0 if (v.major,v.minor) in {(3,11),(3,12)} else 1)" >nul 2>nul
   if errorlevel 1 (
-    echo [INFO] Ancien .venv incompatible - recreation...
+    echo [INFO] Ancien .venv incompatible - recreation avec %PY_CMD% ...
     rmdir /s /q .venv
   )
 )
 
 if not exist ".venv\Scripts\python.exe" (
   echo Creation de .venv ...
-  python -m venv .venv
+  %PY_CMD% -m venv .venv
   if errorlevel 1 (
     echo [ERREUR] Impossible de creer .venv
     pause
@@ -102,10 +122,6 @@ echo.
 echo  Livraison:
 echo    1) dist\GenerateurCertificats\
 echo    2) redist\
-echo.
-echo  Si Failed to load Python DLL:
-echo    - rebuild avec Python 3.12
-echo    - ou lancez redist\install_redist.bat
 echo ============================================================
 echo.
 
