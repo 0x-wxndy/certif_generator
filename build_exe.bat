@@ -77,4 +77,7 @@ echo.
 echo Note: LibreOffice doit rester installe sur le PC pour l'apercu / PDF.
 echo Fermer la fenetre de l'app = arreter l'application.
 echo.
+echo En cas de probleme, ouvrez le fichier log a cote de l'EXE:
+echo   generateur_certificats.log
+echo.
 pause
