@@ -365,15 +365,15 @@ def _iter_paragraphs(doc: Document):
 
 
 def _enlarge_appreciation_text(doc: Document) -> None:
-    """Slight bump only — Amiri/LO must still fit on a single landscape page."""
+    """Slightly enlarge body/name only — keep single-page layout."""
     for paragraph in _iter_paragraphs(doc):
         text = paragraph.text.strip()
         if not text:
             continue
-        if text.startswith("شهادة"):
+        if text.startswith("شهادة") or text.startswith("◆") or "ختم" in text or text == "التوقيع":
             continue
-        # Template body is ~32 half-points; keep bump modest (was 42 → 2 pages).
-        _bump_runs_at_most(paragraph, max_half_points=34, new_half_points=36)
+        # Template body ≈ 32 half-points (16 pt) → 34 (17 pt), a small bump only.
+        _bump_runs_at_most(paragraph, max_half_points=32, new_half_points=34)
 
 
 def _enlarge_congratulations_fields(doc: Document, recipient_title: str, council_location: str) -> None:
@@ -1094,6 +1094,34 @@ def pdf_to_png_bytes(pdf_path: str | Path, zoom: float = 1.3) -> bytes:
         doc.close()
 
 
+def _hidden_subprocess_kwargs() -> dict:
+    """Kwargs so Windows does not flash CMD / console windows for child processes."""
+    import os
+    import subprocess
+
+    if os.name != "nt":
+        return {}
+
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = 0  # SW_HIDE
+    # DETACHED_PROCESS (0x8) + CREATE_NO_WINDOW — hides soffice/taskkill consoles.
+    creationflags = 0x00000008 | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": creationflags,
+    }
+
+
+def _run_hidden(cmd: list[str], **kwargs):
+    """subprocess.run with console windows suppressed on Windows."""
+    import subprocess
+
+    for key, value in _hidden_subprocess_kwargs().items():
+        kwargs.setdefault(key, value)
+    return subprocess.run(cmd, **kwargs)
+
+
 def _libreoffice_command() -> str:
     """Resolve LibreOffice binary on Linux/macOS/Windows."""
     import os
@@ -1102,6 +1130,11 @@ def _libreoffice_command() -> str:
     for name in ("soffice", "libreoffice"):
         found = shutil.which(name)
         if found:
+            # Prefer .exe over .com on Windows (.com is a console stub → CMD flash).
+            if os.name == "nt" and found.lower().endswith(".com"):
+                exe = Path(found).with_suffix(".exe")
+                if exe.exists():
+                    return str(exe)
             return found
 
     if os.name == "nt":
@@ -1133,16 +1166,17 @@ def _libreoffice_command() -> str:
 def _terminate_libreoffice_processes() -> None:
     """Best-effort cleanup of hung LibreOffice instances (common on Windows)."""
     import os
-    import subprocess
 
     if os.name == "nt":
-        for image in ("soffice.exe", "soffice.bin", "oosplash.exe"):
-            subprocess.run(
+        for image in ("soffice.exe", "soffice.bin", "oosplash.exe", "soffice.com"):
+            _run_hidden(
                 ["taskkill", "/F", "/IM", image, "/T"],
                 capture_output=True,
                 check=False,
             )
         return
+
+    import subprocess
 
     subprocess.run(["pkill", "-9", "soffice"], capture_output=True, check=False)
     subprocess.run(["pkill", "-9", "libreoffice"], capture_output=True, check=False)
@@ -1155,10 +1189,10 @@ def docx_to_pdf_bytes(docx_path: str | Path) -> bytes:
     - Disk cache keyed by source mtime (instant on repeat)
     - Persistent LibreOffice user profile (avoids cold-start every call)
     - Light italic-Arabic patch only (no full font remap)
+    - Hidden subprocesses on Windows (no CMD spam)
     """
     import os
     import shutil
-    import subprocess
     import tempfile
     import time
 
@@ -1200,6 +1234,7 @@ def docx_to_pdf_bytes(docx_path: str | Path) -> bytes:
         cmd = [
             soffice,
             "--headless",
+            "--invisible",
             "--nologo",
             "--norestore",
             "--nofirststartwizard",
@@ -1212,6 +1247,8 @@ def docx_to_pdf_bytes(docx_path: str | Path) -> bytes:
             str(work_docx.resolve()),
         ]
 
+        import subprocess
+
         run_kwargs: dict = {
             "capture_output": True,
             "text": True,
@@ -1220,15 +1257,11 @@ def docx_to_pdf_bytes(docx_path: str | Path) -> bytes:
             "env": env,
             "cwd": str(tmp_dir),
         }
-        if os.name == "nt":
-            run_kwargs["creationflags"] = getattr(
-                subprocess, "CREATE_NO_WINDOW", 0
-            ) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 
         last_error = ""
         for attempt in range(2):
             try:
-                result = subprocess.run(cmd, **run_kwargs)
+                result = _run_hidden(cmd, **run_kwargs)
             except subprocess.TimeoutExpired:
                 _terminate_libreoffice_processes()
                 last_error = "LibreOffice a dépassé le délai (120 s)"
