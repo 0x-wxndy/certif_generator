@@ -33,3 +33,5 @@ Notes
 -----
   - Les .exe / .msi ne sont pas versionnés dans Git (trop lourds).
   - Relancez download_redist.bat pour les récupérer.
+  - Si PDF / aperçu reste bloqué : fermez LibreOffice (toutes fenêtres),
+    puis réessayez. L'app utilise un profil isolé pour éviter les blocages.

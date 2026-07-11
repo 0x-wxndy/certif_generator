@@ -23,6 +23,7 @@ from certificate_generator import (
     generate_from_spreadsheet,
     get_template,
     list_templates,
+    pdf_bytes_to_png_bytes,
     write_bulk_excel_templates,
 )
 
@@ -215,16 +216,40 @@ st.markdown(
         border-radius: 12px;
         border: 1px solid var(--border);
     }}
-    div[data-testid="stTabs"] button {{
+    div[data-testid="stTabs"] button,
+    div[data-testid="stTabs"] [role="tab"] {{
         font-family: "Source Sans 3", sans-serif !important;
         font-weight: 600 !important;
         font-size: 0.9rem !important;
-        color: var(--text-muted) !important;
+        color: #14241C !important;
+        opacity: 1 !important;
         border-radius: 9px !important;
+        background: transparent !important;
     }}
-    div[data-testid="stTabs"] button[aria-selected="true"] {{
-        color: var(--green-deep) !important;
+    /* Nested labels often stay pale/white unless forced */
+    div[data-testid="stTabs"] button *,
+    div[data-testid="stTabs"] [role="tab"] *,
+    div[data-testid="stTabs"] button p,
+    div[data-testid="stTabs"] button span,
+    div[data-testid="stTabs"] [data-baseweb="tab"] p,
+    div[data-testid="stTabs"] [data-baseweb="tab"] span {{
+        color: #14241C !important;
+        opacity: 1 !important;
+        -webkit-text-fill-color: #14241C !important;
+    }}
+    div[data-testid="stTabs"] button[aria-selected="true"],
+    div[data-testid="stTabs"] [role="tab"][aria-selected="true"] {{
+        color: #0A3D2C !important;
         background: #fff !important;
+        box-shadow: 0 1px 3px rgba(10, 61, 44, 0.12);
+    }}
+    div[data-testid="stTabs"] button[aria-selected="true"] *,
+    div[data-testid="stTabs"] [role="tab"][aria-selected="true"] *,
+    div[data-testid="stTabs"] button[aria-selected="true"] p,
+    div[data-testid="stTabs"] button[aria-selected="true"] span {{
+        color: #0A3D2C !important;
+        -webkit-text-fill-color: #0A3D2C !important;
+        font-weight: 700 !important;
     }}
     div[data-testid="stTabs"] [data-baseweb="tab-highlight"] {{
         background-color: var(--gold) !important;
@@ -375,7 +400,9 @@ st.markdown(
     }}
 
     div[data-testid="stFormSubmitButton"] button,
-    div[data-testid="stBaseButton-secondary"] button {{
+    div[data-testid="stBaseButton-secondary"] button,
+    button[kind="secondary"],
+    div[data-testid="stButton"] button {{
         border-radius: 10px !important;
         font-weight: 600 !important;
     }}
@@ -386,6 +413,18 @@ st.markdown(
     }}
     div[data-testid="stFormSubmitButton"] button:hover {{
         filter: brightness(1.05);
+    }}
+    /* Secondary actions (Aperçu, etc.) — avoid washed-out gray */
+    div[data-testid="stButton"] button,
+    button[kind="secondary"] {{
+        background: linear-gradient(180deg, #FFF8E7, #F0E2B0) !important;
+        color: #1A1608 !important;
+        border: 1px solid #B89C34 !important;
+    }}
+    div[data-testid="stButton"] button *,
+    button[kind="secondary"] * {{
+        color: #1A1608 !important;
+        -webkit-text-fill-color: #1A1608 !important;
     }}
 
     .stDownloadButton button {{
@@ -715,6 +754,8 @@ def _render_preview_panel() -> None:
                         with st.spinner("Conversion PDF…"):
                             result["pdf_bytes"] = docx_to_pdf_bytes(result["path"])
                             result["pdf_name"] = pdf_name
+                            result.pop("preview_png", None)
+                            result.pop("preview_zoom", None)
                             st.session_state.last_result = result
                     st.download_button(
                         "Télécharger PDF",
@@ -740,17 +781,32 @@ def _render_preview_panel() -> None:
         return
 
     _status_badge(result["name"])
+    zoom = float(st.session_state.preview_zoom)
     try:
-        with st.spinner("Préparation de l'aperçu…"):
-            preview_png = document_to_png_bytes(
-                result["path"],
-                zoom=st.session_state.preview_zoom,
-            )
-        st.image(preview_png, use_container_width=True)
+        cache_ok = (
+            result.get("preview_png")
+            and result.get("preview_zoom") == zoom
+            and result.get("preview_for") == result["name"]
+        )
+        if not cache_ok:
+            with st.spinner("Préparation de l'aperçu…"):
+                if result["format"] == "pdf":
+                    preview_png = pdf_bytes_to_png_bytes(result["bytes"], zoom=zoom)
+                elif result.get("pdf_bytes"):
+                    preview_png = pdf_bytes_to_png_bytes(result["pdf_bytes"], zoom=zoom)
+                else:
+                    preview_png = document_to_png_bytes(result["path"], zoom=zoom)
+                result["preview_png"] = preview_png
+                result["preview_zoom"] = zoom
+                result["preview_for"] = result["name"]
+                st.session_state.last_result = result
+        st.image(result["preview_png"], use_container_width=True)
     except Exception as exc:
         st.warning(f"Aperçu image indisponible : {exc}")
-        st.caption("Vous pouvez toujours télécharger le fichier généré.")
-
+        st.caption(
+            "Le DOCX est disponible. Pour l'aperçu / PDF, installez LibreOffice "
+            "et fermez toute fenêtre LibreOffice ouverte, puis réessayez."
+        )
 
 def _render_generate_tab() -> None:
     col_left, col_right = st.columns([5, 7], gap="large")

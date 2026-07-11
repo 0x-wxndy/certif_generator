@@ -1008,6 +1008,11 @@ def _libreoffice_command() -> str:
             / "LibreOffice"
             / "program"
             / "soffice.exe",
+            Path(os.environ.get("LOCALAPPDATA", ""))
+            / "Programs"
+            / "LibreOffice"
+            / "program"
+            / "soffice.exe",
         ]
         for candidate in candidates:
             if candidate.exists():
@@ -1019,11 +1024,35 @@ def _libreoffice_command() -> str:
     )
 
 
-def docx_to_pdf_bytes(docx_path: str | Path) -> bytes:
-    """Convert a DOCX to PDF bytes via LibreOffice."""
+def _terminate_libreoffice_processes() -> None:
+    """Best-effort cleanup of hung LibreOffice instances (common on Windows)."""
     import os
     import subprocess
+
+    if os.name == "nt":
+        for image in ("soffice.exe", "soffice.bin", "oosplash.exe"):
+            subprocess.run(
+                ["taskkill", "/F", "/IM", image, "/T"],
+                capture_output=True,
+                check=False,
+            )
+        return
+
+    subprocess.run(["pkill", "-9", "soffice"], capture_output=True, check=False)
+    subprocess.run(["pkill", "-9", "libreoffice"], capture_output=True, check=False)
+
+
+def docx_to_pdf_bytes(docx_path: str | Path) -> bytes:
+    """Convert a DOCX to PDF bytes via LibreOffice.
+
+    Uses an isolated UserInstallation profile so Windows conversions do not hang
+    on a locked default profile / recovery dialog.
+    """
+    import os
+    import shutil
+    import subprocess
     import tempfile
+    import time
 
     docx_path = Path(docx_path)
     if not docx_path.exists():
@@ -1032,46 +1061,97 @@ def docx_to_pdf_bytes(docx_path: str | Path) -> bytes:
     fonts_dir = BASE_DIR / "fonts"
     env = os.environ.copy()
     if fonts_dir.exists():
-        # Ensure LibreOffice can see project fonts even if system cache is stale.
         existing = env.get("SAL_FONTPATH", "")
         env["SAL_FONTPATH"] = str(fonts_dir) if not existing else f"{fonts_dir}{os.pathsep}{existing}"
+    # Avoid interactive prompts / first-run noise in headless mode.
+    env.setdefault("SAL_NO_NAG_DIALOGS", "1")
 
     soffice = _libreoffice_command()
-    with tempfile.TemporaryDirectory(prefix="cert_pdf_") as tmp:
-        tmp_dir = Path(tmp)
-        result = subprocess.run(
-            [
+    profile_root = Path(tempfile.mkdtemp(prefix="lo_profile_"))
+    try:
+        with tempfile.TemporaryDirectory(prefix="cert_pdf_") as tmp:
+            tmp_dir = Path(tmp)
+            # Work on a local copy — avoids locks on Desktop / OneDrive paths.
+            work_docx = tmp_dir / docx_path.name
+            shutil.copy2(docx_path, work_docx)
+
+            profile_uri = profile_root.resolve().as_uri()
+            cmd = [
                 soffice,
                 "--headless",
+                "--invisible",
                 "--nologo",
+                "--norestore",
                 "--nofirststartwizard",
+                "--nolockcheck",
+                "--nodefault",
+                f"-env:UserInstallation={profile_uri}",
                 "--convert-to",
-                "pdf",
+                "pdf:writer_pdf_Export",
                 "--outdir",
                 str(tmp_dir),
-                str(docx_path.resolve()),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=90,
-            check=False,
-            env=env,
-        )
-        pdf_path = tmp_dir / f"{docx_path.stem}.pdf"
-        if result.returncode != 0 or not pdf_path.exists():
-            detail = (result.stderr or result.stdout or "").strip()
-            raise RuntimeError(f"Conversion DOCX → PDF échouée: {detail or 'LibreOffice error'}")
-        return pdf_path.read_bytes()
+                str(work_docx.resolve()),
+            ]
+
+            run_kwargs: dict = {
+                "capture_output": True,
+                "text": True,
+                "timeout": 180,
+                "check": False,
+                "env": env,
+                "cwd": str(tmp_dir),
+            }
+            if os.name == "nt":
+                run_kwargs["creationflags"] = getattr(
+                    subprocess, "CREATE_NO_WINDOW", 0
+                ) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
+            last_error = ""
+            for attempt in range(2):
+                try:
+                    result = subprocess.run(cmd, **run_kwargs)
+                except subprocess.TimeoutExpired:
+                    _terminate_libreoffice_processes()
+                    last_error = "LibreOffice a dépassé le délai (180 s)"
+                    if attempt == 0:
+                        time.sleep(1.5)
+                        continue
+                    raise RuntimeError(
+                        "Conversion DOCX → PDF échouée : délai dépassé. "
+                        "Fermez LibreOffice s'il est ouvert, puis réessayez."
+                    ) from None
+
+                pdf_path = tmp_dir / f"{work_docx.stem}.pdf"
+                if result.returncode == 0 and pdf_path.exists():
+                    return pdf_path.read_bytes()
+
+                last_error = (result.stderr or result.stdout or "").strip()
+                # Retry once after clearing hung soffice processes.
+                if attempt == 0:
+                    _terminate_libreoffice_processes()
+                    time.sleep(1.5)
+                    continue
+
+            raise RuntimeError(
+                f"Conversion DOCX → PDF échouée: {last_error or 'LibreOffice error'}"
+            )
+    finally:
+        shutil.rmtree(profile_root, ignore_errors=True)
+
+
+def pdf_bytes_to_png_bytes(pdf_bytes: bytes, zoom: float = 1.3) -> bytes:
+    """Render the first page of PDF bytes to PNG."""
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        pixmap = doc[0].get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+        return pixmap.tobytes("png")
+    finally:
+        doc.close()
 
 
 def docx_to_png_bytes(docx_path: str | Path, zoom: float = 1.3) -> bytes:
     """Convert a DOCX to PNG via LibreOffice (DOCX → PDF → PNG)."""
-    import tempfile
-
-    with tempfile.TemporaryDirectory(prefix="cert_preview_") as tmp:
-        pdf_path = Path(tmp) / f"{Path(docx_path).stem}.pdf"
-        pdf_path.write_bytes(docx_to_pdf_bytes(docx_path))
-        return pdf_to_png_bytes(pdf_path, zoom=zoom)
+    return pdf_bytes_to_png_bytes(docx_to_pdf_bytes(docx_path), zoom=zoom)
 
 
 def document_to_png_bytes(path: str | Path, zoom: float = 1.3) -> bytes:
