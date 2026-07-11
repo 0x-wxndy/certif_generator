@@ -18,23 +18,21 @@ if errorlevel 1 (
   echo.
 )
 
-REM ---- VC++ Redistributable ----
 if exist "VC_redist.x64.exe" (
   echo [1/3] Installation VC++ Redistributable...
   "VC_redist.x64.exe" /install /quiet /norestart
   if errorlevel 1 (
-    echo [WARN] Installation silencieuse VC++ echouee — ouverture interactive...
+    echo [WARN] Installation silencieuse VC++ echouee - ouverture interactive...
     start /wait "" "VC_redist.x64.exe"
   ) else (
     echo [OK] VC++ installe.
   )
 ) else (
-  echo [MANQUANT] VC_redist.x64.exe — lancez d'abord download_redist.bat
+  echo [MANQUANT] VC_redist.x64.exe - lancez d'abord download_redist.bat
 )
 
 echo.
 
-REM ---- LibreOffice ----
 set "LO_MSI="
 for %%F in (LibreOffice_*_Win_x86-64.msi) do set "LO_MSI=%%F"
 if defined LO_MSI (
@@ -43,19 +41,18 @@ if defined LO_MSI (
     echo       Cela peut prendre plusieurs minutes.
     msiexec /i "%LO_MSI%" /passive ALLUSERS=1 CREATEDESKTOPLINK=0 REGISTER_ALL_MSO_TYPES=0
     if errorlevel 1 (
-      echo [WARN] Installation passive echouee — ouverture interactive...
+      echo [WARN] Installation passive echouee - ouverture interactive...
       start /wait msiexec /i "%LO_MSI%"
     ) else (
       echo [OK] LibreOffice installe.
     )
   )
 ) else (
-  echo [MANQUANT] LibreOffice_*.msi — lancez d'abord download_redist.bat
+  echo [MANQUANT] LibreOffice_*.msi - lancez d'abord download_redist.bat
 )
 
 echo.
 
-REM ---- Python 3.12 (optional, for builders) ----
 if /I "%~1"=="/with-python" goto install_python
 echo [3/3] Python 3.12 ignore (pas besoin pour les utilisateurs finaux).
 echo       Pour l'installer quand meme:  install_redist.bat /with-python
@@ -66,7 +63,7 @@ if exist "python-3.12.10-amd64.exe" (
   echo [3/3] Installation Python 3.12...
   "python-3.12.10-amd64.exe" /quiet InstallAllUsers=1 PrependPath=1 Include_test=0
   if errorlevel 1 (
-    echo [WARN] Installation silencieuse Python echouee — ouverture interactive...
+    echo [WARN] Installation silencieuse Python echouee - ouverture interactive...
     start /wait "" "python-3.12.10-amd64.exe"
   ) else (
     echo [OK] Python 3.12 installe.

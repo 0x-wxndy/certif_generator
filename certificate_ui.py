@@ -1024,9 +1024,6 @@ def _render_about_tab() -> None:
                 <li>Onglet <strong>Modèles</strong> : consultez et téléchargez les fichiers sources.</li>
                 <li>Onglet <strong>Certificats générés</strong> : retrouvez l’historique local.</li>
               </ol>
-              <p><strong>Windows :</strong> double-cliquez sur <code>lancer_app.bat</code>,
-              ou construisez un EXE avec <code>build_exe.bat</code>
-              (Python 3.10+ et LibreOffice recommandés pour l’aperçu PDF).</p>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1054,9 +1051,6 @@ def _render_about_tab() -> None:
                 <li>تبويب <strong>النماذج</strong>: عرض وتحميل ملفات المصدر.</li>
                 <li>تبويب <strong>الشهادات المُنشأة</strong>: سجل الملفات المحلية.</li>
               </ol>
-              <p><strong>ويندوز:</strong> شغّل <code>lancer_app.bat</code>
-              أو أنشئ ملف EXE عبر <code>build_exe.bat</code>
-              (يُفضّل Python 3.10+ وLibreOffice للمعاينة).</p>
             </div>
             """,
             unsafe_allow_html=True,

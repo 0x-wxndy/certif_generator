@@ -19,19 +19,17 @@ echo Python detecte:
 python --version
 echo.
 
-REM PyInstaller is unreliable with very new Python (3.13/3.14). Prefer 3.11/3.12.
+REM Prefer Python 3.11/3.12 - PyInstaller is unreliable on 3.13/3.14
 python -c "import sys; v=sys.version_info; raise SystemExit(0 if (v.major,v.minor) in {(3,11),(3,12)} else 1)"
 if errorlevel 1 (
   echo [ERREUR] Ce build exige Python 3.11 ou 3.12.
   echo Vous utilisez actuellement:
   python --version
   echo.
-  echo Desinstallez Python 3.13/3.14 pour ce projet, ou installez 3.12 a cote:
-  echo   https://www.python.org/downloads/release/python-31210/
-  echo Puis recreez le venv:
+  echo Installez Python 3.12, puis:
   echo   rmdir /s /q .venv
   echo   py -3.12 -m venv .venv
-  echo   puis relancez build_exe.bat
+  echo   build_exe.bat
   pause
   exit /b 1
 )
@@ -39,7 +37,7 @@ if errorlevel 1 (
 if exist ".venv\Scripts\python.exe" (
   ".venv\Scripts\python.exe" -c "import sys; v=sys.version_info; raise SystemExit(0 if (v.major,v.minor) in {(3,11),(3,12)} else 1)"
   if errorlevel 1 (
-    echo [INFO] Ancien .venv incompatible — recreation avec le Python actuel...
+    echo [INFO] Ancien .venv incompatible - recreation...
     rmdir /s /q .venv
   )
 )
@@ -77,35 +75,7 @@ echo Construction de l'executable (dossier dist\GenerateurCertificats)...
 echo Cela peut prendre plusieurs minutes.
 echo.
 
-".venv\Scripts\pyinstaller.exe" --noconfirm --clean ^
-  --name GenerateurCertificats ^
-  --onedir ^
-  --windowed ^
-  --add-data "certificate_ui.py;." ^
-  --add-data "certificate_generator.py;." ^
-  --add-data "requirements.txt;." ^
-  --add-data ".streamlit;.streamlit" ^
-  --add-data "assets;assets" ^
-  --add-data "fonts;fonts" ^
-  --add-data "certificates templates;certificates templates" ^
-  --add-data "bulk_templates;bulk_templates" ^
-  --hidden-import streamlit ^
-  --hidden-import streamlit.web.cli ^
-  --hidden-import streamlit.web.bootstrap ^
-  --hidden-import streamlit.runtime.scriptrunner.magic_funcs ^
-  --hidden-import webview ^
-  --hidden-import docx ^
-  --hidden-import docxtpl ^
-  --hidden-import openpyxl ^
-  --hidden-import fitz ^
-  --hidden-import arabic_reshaper ^
-  --hidden-import bidi ^
-  --collect-all streamlit ^
-  --collect-all altair ^
-  --collect-all webview ^
-  --collect-all docxtpl ^
-  --collect-all arabic_reshaper ^
-  run_desktop.py
+".venv\Scripts\pyinstaller.exe" --noconfirm --clean --name GenerateurCertificats --onedir --windowed --add-data "certificate_ui.py;." --add-data "certificate_generator.py;." --add-data "requirements.txt;." --add-data ".streamlit;.streamlit" --add-data "assets;assets" --add-data "fonts;fonts" --add-data "certificates templates;certificates templates" --add-data "bulk_templates;bulk_templates" --hidden-import streamlit --hidden-import streamlit.web.cli --hidden-import streamlit.web.bootstrap --hidden-import streamlit.runtime.scriptrunner.magic_funcs --hidden-import webview --hidden-import docx --hidden-import docxtpl --hidden-import openpyxl --hidden-import fitz --hidden-import arabic_reshaper --hidden-import bidi --collect-all streamlit --collect-all altair --collect-all webview --collect-all docxtpl --collect-all arabic_reshaper run_desktop.py
 
 if errorlevel 1 (
   echo.
@@ -127,17 +97,15 @@ echo.
 echo  Lancez UNIQUEMENT celui-ci:
 echo    dist\GenerateurCertificats\GenerateurCertificats.exe
 echo.
-echo  NE PAS utiliser le dossier "build\" — c'est un cache interne.
+echo  NE PAS utiliser le dossier build\ - cache interne.
 echo.
 echo  Livraison:
-echo    1) dist\GenerateurCertificats\   (l'app)
-echo    2) redist\                      (VC++ / LibreOffice / Python)
-echo       - download_redist.bat  pour telecharger les installateurs
-echo       - install_redist.bat   sur le PC cible (une fois)
+echo    1) dist\GenerateurCertificats\
+echo    2) redist\
 echo.
-echo  Si "Failed to load Python DLL":
+echo  Si Failed to load Python DLL:
 echo    - rebuild avec Python 3.12
-echo    - ou lancez redist\install_redist.bat (installe VC++)
+echo    - ou lancez redist\install_redist.bat
 echo ============================================================
 echo.
 

@@ -9,7 +9,7 @@ echo.
 where python >nul 2>nul
 if errorlevel 1 (
   echo [ERREUR] Python n'est pas installe ou pas dans le PATH.
-  echo Installez Python 3.10+ depuis https://www.python.org/downloads/
+  echo Installez Python 3.12 depuis https://www.python.org/downloads/
   echo Cochez "Add python.exe to PATH" lors de l'installation.
   pause
   exit /b 1

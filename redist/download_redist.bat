@@ -29,7 +29,7 @@ call :download "%VC_URL%" "%VC_FILE%"
 call :download "%LO_URL%" "%LO_FILE%"
 
 echo.
-echo Termine. Contenu de redist\:
+echo Termine. Contenu de redist:
 dir /b *.exe *.msi 2>nul
 echo.
 echo Ensuite lancez install_redist.bat sur le PC cible.
