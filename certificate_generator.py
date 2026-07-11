@@ -376,6 +376,111 @@ def _enlarge_appreciation_text(doc: Document) -> None:
         _bump_runs_at_most(paragraph, max_half_points=32, new_half_points=34)
 
 
+def _distribute_appreciation_layout(doc: Document) -> None:
+    """
+    Push title-and-below content downward so the landscape page is balanced,
+    without overflowing onto a second page.
+    """
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.shared import Cm
+
+    def _spacing(paragraph):
+        pPr = paragraph._element.get_or_add_pPr()
+        node = pPr.find(qn("w:spacing"))
+        if node is None:
+            node = OxmlElement("w:spacing")
+            pPr.append(node)
+        return node
+
+    def _make_spacer(before: int = 120, after: int = 120):
+        p = OxmlElement("w:p")
+        pPr = OxmlElement("w:pPr")
+        sp = OxmlElement("w:spacing")
+        sp.set(qn("w:before"), str(before))
+        sp.set(qn("w:after"), str(after))
+        pPr.append(sp)
+        jc = OxmlElement("w:jc")
+        jc.set(qn("w:val"), "center")
+        pPr.append(jc)
+        p.append(pPr)
+        return p
+
+    # Keep at most one blank spacer between blocks (template has several).
+    blanks: list = []
+    for paragraph in list(doc.paragraphs):
+        if not paragraph.text.strip():
+            blanks.append(paragraph)
+            continue
+        if len(blanks) > 1:
+            for extra in blanks[1:]:
+                el = extra._element
+                parent = el.getparent()
+                if parent is not None:
+                    parent.remove(el)
+        blanks = []
+    if len(blanks) > 1:
+        for extra in blanks[1:]:
+            el = extra._element
+            parent = el.getparent()
+            if parent is not None:
+                parent.remove(el)
+
+    # Insert spacers just before the title to shift the whole lower block down.
+    title_el = None
+    for paragraph in doc.paragraphs:
+        if paragraph.text.strip().startswith("شهادة"):
+            title_el = paragraph._element
+            break
+    if title_el is not None and title_el.getparent() is not None:
+        parent = title_el.getparent()
+        for _ in range(3):
+            parent.insert(parent.index(title_el), _make_spacer(120, 120))
+
+    title_seen = False
+    for paragraph in doc.paragraphs:
+        text = paragraph.text.strip()
+        sp = _spacing(paragraph)
+
+        if text.startswith("شهادة"):
+            title_seen = True
+            sp.set(qn("w:before"), "160")
+            sp.set(qn("w:after"), "120")
+            sp.set(qn("w:line"), "260")
+            sp.set(qn("w:lineRule"), "auto")
+            continue
+
+        if not title_seen:
+            continue
+
+        if text.startswith("◆"):
+            sp.set(qn("w:before"), "100")
+            sp.set(qn("w:after"), "120")
+        elif text.startswith("السيد"):
+            sp.set(qn("w:before"), "140")
+            sp.set(qn("w:after"), "140")
+            sp.set(qn("w:line"), "280")
+            sp.set(qn("w:lineRule"), "auto")
+        elif text.startswith("تقديرا") or text.startswith("المنجزة"):
+            sp.set(qn("w:before"), "90")
+            sp.set(qn("w:after"), "90")
+            sp.set(qn("w:line"), "280")
+            sp.set(qn("w:lineRule"), "auto")
+        elif "ختم" in text:
+            sp.set(qn("w:before"), "160")
+            sp.set(qn("w:after"), "100")
+        elif text == "التوقيع":
+            sp.set(qn("w:before"), "80")
+            sp.set(qn("w:after"), "40")
+        elif not text:
+            sp.set(qn("w:before"), "100")
+            sp.set(qn("w:after"), "100")
+
+    section = doc.sections[0]
+    section.bottom_margin = Cm(0.55)
+    section.top_margin = Cm(0.7)
+
+
 def _enlarge_congratulations_fields(doc: Document, recipient_title: str, council_location: str) -> None:
     """Make Nom complet | Titre and Lieu du conseil larger than body text."""
     targets = {value.strip() for value in (recipient_title, council_location) if value and value.strip()}
@@ -700,7 +805,7 @@ def generate_docx_certificate(
             _enlarge_appreciation_text(doc)
             # Only fix italic seal line — full Amiri remap made the cert 2 pages.
             _fix_arabic_pdf_fonts(doc, size_scale=0.9)
-            _tighten_paragraph_spacing(doc)
+            _distribute_appreciation_layout(doc)
             doc.save(str(output_path))
         elif template_id in {"condolence_individual", "condolence_family", "congratulations"}:
             # Scheherazade is taller than Arabic Typesetting — shrink condolence
