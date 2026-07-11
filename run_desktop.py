@@ -201,6 +201,8 @@ def _open_desktop_window(port: int) -> bool:
 
     url = f"http://127.0.0.1:{port}"
     _log(f"Opening desktop window: {url}")
+    # Streamlit download_button needs this — disabled by default in pywebview.
+    webview.settings["ALLOW_DOWNLOADS"] = True
     webview.create_window(
         title="وزارة العدل — Générateur de certificats",
         url=url,
@@ -219,6 +221,7 @@ def _spawn_streamlit_child(ui_script: Path, port: int) -> subprocess.Popen:
     """
     env = os.environ.copy()
     env["CERT_APP_CHILD"] = "1"
+    env["CERT_DESKTOP"] = "1"
     env["STREAMLIT_SERVER_PORT"] = str(port)
     env["STREAMLIT_SERVER_ADDRESS"] = "127.0.0.1"
     env["STREAMLIT_SERVER_HEADLESS"] = "true"

@@ -63,6 +63,8 @@ WRITE_DIR = _resolve_writable_dir()
 TEMPLATES_DIR = BASE_DIR / "certificates templates"
 OUTPUT_DIR = WRITE_DIR / "generated_certificates"
 BULK_DIR = WRITE_DIR / "bulk_templates"
+PREVIEW_CACHE_DIR = WRITE_DIR / "preview_cache"
+STATIC_PREVIEWS_DIR = BASE_DIR / "assets" / "previews"
 HONORARY_PORTRAIT_SOURCE = "archive/نموذج شهادة 2.pdf"
 HONORARY_LANDSCAPE_SOURCE = "شهادة شرفية.pdf"
 
@@ -1162,3 +1164,27 @@ def document_to_png_bytes(path: str | Path, zoom: float = 1.3) -> bytes:
     if suffix == ".docx":
         return docx_to_png_bytes(path, zoom=zoom)
     raise ValueError(f"Aperçu non pris en charge pour: {suffix}")
+
+
+def static_template_preview_path(template_id: str) -> Path | None:
+    """Bundled PNG preview for official templates (instant, no LibreOffice)."""
+    candidate = STATIC_PREVIEWS_DIR / f"{template_id}.png"
+    return candidate if candidate.exists() else None
+
+
+def cached_document_preview(path: str | Path, zoom: float = 1.1) -> bytes:
+    """Disk-cached PNG preview; first DOCX conversion may still need LibreOffice."""
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(path)
+
+    PREVIEW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    mtime = int(path.stat().st_mtime)
+    zoom_key = str(zoom).replace(".", "_")
+    cache_path = PREVIEW_CACHE_DIR / f"{path.stem}_{mtime}_{zoom_key}.png"
+    if cache_path.exists():
+        return cache_path.read_bytes()
+
+    png = document_to_png_bytes(path, zoom=zoom)
+    cache_path.write_bytes(png)
+    return png

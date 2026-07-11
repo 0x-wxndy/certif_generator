@@ -108,9 +108,30 @@ if errorlevel 1 (
 
 echo.
 echo [3/4] Nettoyage des anciens builds...
-if exist build rmdir /s /q build
-if exist dist rmdir /s /q dist
-if exist GenerateurCertificats.spec del /f /q GenerateurCertificats.spec
+echo       Fermeture de l'app si elle tourne encore...
+taskkill /F /IM GenerateurCertificats.exe /T >nul 2>nul
+taskkill /F /IM soffice.exe /T >nul 2>nul
+taskkill /F /IM soffice.bin /T >nul 2>nul
+timeout /t 2 /nobreak >nul
+
+if exist build rmdir /s /q build 2>nul
+if exist GenerateurCertificats.spec del /f /q GenerateurCertificats.spec 2>nul
+
+if exist dist (
+  rmdir /s /q dist 2>nul
+  if exist dist (
+    echo.
+    echo [ERREUR] Impossible de supprimer dist\ — fichiers verrouilles.
+    echo.
+    echo 1. Fermez GenerateurCertificats.exe ^(toutes fenetres^)
+    echo 2. Fermez l'Explorateur s'il est ouvert dans dist\
+    echo 3. Dans le Gestionnaire des taches, tuez GenerateurCertificats.exe
+    echo 4. Relancez build_exe.bat
+    echo.
+    pause
+    exit /b 1
+  )
+)
 
 echo.
 echo [4/4] Construction PyInstaller...
@@ -119,6 +140,12 @@ echo       (plusieurs minutes - laissez tourner)
 if errorlevel 1 (
   echo.
   echo [ERREUR] PyInstaller a echoue
+  echo.
+  echo Si vous voyez "Access is denied" / MSVCP140.dll :
+  echo   - Fermez GenerateurCertificats.exe
+  echo   - Fermez toute fenetre Explorateur dans dist\
+  echo   - Relancez build_exe.bat
+  echo.
   pause
   exit /b 1
 )

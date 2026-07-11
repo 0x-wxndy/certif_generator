@@ -16,7 +16,9 @@ from certificate_generator import (
     BULK_DIR,
     OUTPUT_DIR,
     TEMPLATES_DIR,
+    WRITE_DIR,
     build_excel_template_bytes,
+    cached_document_preview,
     document_to_png_bytes,
     docx_to_pdf_bytes,
     generate_certificate,
@@ -24,10 +26,12 @@ from certificate_generator import (
     get_template,
     list_templates,
     pdf_bytes_to_png_bytes,
+    static_template_preview_path,
     write_bulk_excel_templates,
 )
 
 ASSETS_DIR = BASE_DIR / "assets"
+EXPORTS_DIR = WRITE_DIR / "exports"
 EMBLEM_PATH = ASSETS_DIR / "Peoples-Democratic-Republic-of-Algeria.png"
 FLAG_PATH = ASSETS_DIR / "algerie_flag.png"
 MINISTRY_SVG = ASSETS_DIR / "وزارة_العدل_الجزائر.svg"
@@ -649,6 +653,89 @@ def _render_form_fields(template, form_data: dict) -> None:
         index += 1
 
 
+def _is_desktop() -> bool:
+    """True when running inside the pywebview desktop shell."""
+    import os
+
+    return os.environ.get("CERT_DESKTOP") == "1" or os.environ.get("CERT_APP_CHILD") == "1"
+
+
+def _open_path(path: Path) -> None:
+    """Open a file or folder with the OS default app."""
+    import os
+    import subprocess
+    import sys
+
+    path = Path(path)
+    if os.name == "nt":
+        os.startfile(str(path))  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
+
+
+def _save_bytes_and_open(data: bytes, file_name: str) -> Path:
+    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    target = EXPORTS_DIR / Path(file_name).name
+    target.write_bytes(data)
+    _open_path(target)
+    return target
+
+
+def _is_user_file(path: Path) -> bool:
+    """True if path lives under the writable app folder (safe to open in place)."""
+    try:
+        path.resolve().relative_to(WRITE_DIR.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _offer_file(
+    label: str,
+    *,
+    data: bytes | None = None,
+    path: Path | None = None,
+    file_name: str | None = None,
+    mime: str = "application/octet-stream",
+    key: str,
+) -> None:
+    """
+    Download in browser; in desktop EXE, open with the system app
+    (pywebview blocks Streamlit downloads unless ALLOW_DOWNLOADS is on —
+    opening/saving the file is the reliable path).
+    """
+    if path is not None and path.exists() and data is None:
+        data = path.read_bytes()
+        file_name = file_name or path.name
+    if data is None or not file_name:
+        st.caption("Fichier indisponible")
+        return
+
+    if _is_desktop():
+        if st.button(label, key=key, use_container_width=True):
+            try:
+                if path is not None and path.exists() and _is_user_file(path):
+                    _open_path(path)
+                    st.success(f"Ouvert : {path.name}")
+                else:
+                    saved = _save_bytes_and_open(data, file_name)
+                    st.success(f"Enregistré et ouvert : {saved.name}")
+            except Exception as exc:
+                st.error(f"Impossible d'ouvrir le fichier : {exc}")
+        return
+
+    st.download_button(
+        label,
+        data=data,
+        file_name=file_name,
+        mime=mime,
+        key=key,
+        use_container_width=True,
+    )
+
+
 def _download_zip(outputs: list[Path], zip_name: str) -> None:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -666,12 +753,11 @@ def _download_zip(outputs: list[Path], zip_name: str) -> None:
                 continue
             archive.write(path, arcname=path.name)
     buffer.seek(0)
-    st.download_button(
-        label="Télécharger le ZIP (PDF)",
+    _offer_file(
+        "Télécharger le ZIP (PDF)",
         data=buffer.getvalue(),
         file_name=zip_name,
         mime="application/zip",
-        use_container_width=True,
         key=f"zip_{zip_name}",
     )
 
@@ -730,43 +816,45 @@ def _render_preview_panel() -> None:
         pdf_name = Path(result["name"]).with_suffix(".pdf").name
         if result["format"] == "pdf":
             with tool_col3:
-                st.download_button(
+                _offer_file(
                     "Télécharger PDF",
                     data=result["bytes"],
+                    path=Path(result["path"]) if result.get("path") else None,
                     file_name=result["name"],
                     mime="application/pdf",
-                    use_container_width=True,
                     key="preview_download_pdf",
                 )
         else:
             with tool_col2:
-                st.download_button(
-                    "DOCX",
+                _offer_file(
+                    "Ouvrir DOCX" if _is_desktop() else "DOCX",
                     data=result["bytes"],
+                    path=Path(result["path"]) if result.get("path") else None,
                     file_name=result["name"],
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
                     key="preview_download_docx",
                 )
             with tool_col3:
-                try:
-                    if "pdf_bytes" not in result or result.get("pdf_name") != pdf_name:
-                        with st.spinner("Conversion PDF…"):
+                # Do not auto-convert on every rerun — only when the user asks.
+                if result.get("pdf_bytes") and result.get("pdf_name") == pdf_name:
+                    _offer_file(
+                        "Télécharger PDF",
+                        data=result["pdf_bytes"],
+                        file_name=pdf_name,
+                        mime="application/pdf",
+                        key="preview_download_pdf",
+                    )
+                elif st.button("Convertir en PDF", key="preview_make_pdf", use_container_width=True):
+                    try:
+                        with st.spinner("Conversion PDF (LibreOffice)…"):
                             result["pdf_bytes"] = docx_to_pdf_bytes(result["path"])
                             result["pdf_name"] = pdf_name
                             result.pop("preview_png", None)
                             result.pop("preview_zoom", None)
                             st.session_state.last_result = result
-                    st.download_button(
-                        "Télécharger PDF",
-                        data=result["pdf_bytes"],
-                        file_name=pdf_name,
-                        mime="application/pdf",
-                        use_container_width=True,
-                        key="preview_download_pdf",
-                    )
-                except Exception as exc:
-                    st.caption(f"PDF indisponible : {exc}")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"PDF indisponible : {exc}")
 
     if not result:
         st.markdown(
@@ -782,30 +870,39 @@ def _render_preview_panel() -> None:
 
     _status_badge(result["name"])
     zoom = float(st.session_state.preview_zoom)
-    try:
-        cache_ok = (
-            result.get("preview_png")
-            and result.get("preview_zoom") == zoom
-            and result.get("preview_for") == result["name"]
-        )
-        if not cache_ok:
-            with st.spinner("Préparation de l'aperçu…"):
+    cache_ok = (
+        result.get("preview_png")
+        and result.get("preview_zoom") == zoom
+        and result.get("preview_for") == result["name"]
+    )
+    if cache_ok:
+        st.image(result["preview_png"], use_container_width=True)
+        return
+
+    if st.button("Afficher l'aperçu", key="show_preview_btn", use_container_width=True):
+        try:
+            with st.spinner("Préparation de l'aperçu (peut prendre 1–2 min la 1ʳᵉ fois)…"):
                 if result["format"] == "pdf":
                     preview_png = pdf_bytes_to_png_bytes(result["bytes"], zoom=zoom)
                 elif result.get("pdf_bytes"):
                     preview_png = pdf_bytes_to_png_bytes(result["pdf_bytes"], zoom=zoom)
                 else:
-                    preview_png = document_to_png_bytes(result["path"], zoom=zoom)
+                    preview_png = cached_document_preview(result["path"], zoom=zoom)
                 result["preview_png"] = preview_png
                 result["preview_zoom"] = zoom
                 result["preview_for"] = result["name"]
                 st.session_state.last_result = result
-        st.image(result["preview_png"], use_container_width=True)
-    except Exception as exc:
-        st.warning(f"Aperçu image indisponible : {exc}")
+            st.rerun()
+        except Exception as exc:
+            st.warning(f"Aperçu image indisponible : {exc}")
+            st.caption(
+                "Le DOCX est disponible via « Ouvrir DOCX ». "
+                "Pour l'aperçu / PDF, LibreOffice doit être installé."
+            )
+    else:
         st.caption(
-            "Le DOCX est disponible. Pour l'aperçu / PDF, installez LibreOffice "
-            "et fermez toute fenêtre LibreOffice ouverte, puis réessayez."
+            "Cliquez sur « Afficher l'aperçu » (LibreOffice, 1ʳᵉ fois seulement) "
+            "ou ouvrez directement le DOCX."
         )
 
 def _render_generate_tab() -> None:
@@ -858,12 +955,11 @@ def _render_generate_tab() -> None:
                 _file_card(batch_template.source_file, batch_template.output_format)
 
                 _section_label("Import Excel / CSV")
-                st.download_button(
-                    label="Télécharger le modèle Excel",
+                _offer_file(
+                    "Télécharger le modèle Excel",
                     data=build_excel_template_bytes(batch_template_id),
                     file_name=f"modele_{batch_template_id}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
                     key="excel_template_download",
                 )
                 uploaded = st.file_uploader(
@@ -954,30 +1050,32 @@ def _render_templates_tab() -> None:
                     if source.suffix.lower() == ".pdf"
                     else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 )
-                st.download_button(
+                _offer_file(
                     "Modèle Word/PDF",
                     data=source.read_bytes(),
                     file_name=source.name,
                     mime=mime,
                     key=f"dl_tpl_{template.id}",
-                    use_container_width=True,
                 )
         with cols[1]:
-            st.download_button(
+            _offer_file(
                 "Excel lot",
                 data=excel_bytes,
                 file_name=excel_path.name,
                 mime=xlsx_mime,
                 key=f"dl_xlsx_{template.id}",
-                use_container_width=True,
-                help="Modèle Excel avec colonnes et lignes d'exemple (remplacez-les par vos données)",
             )
         with cols[2]:
             if st.button("Aperçu", key=f"prev_tpl_{template.id}", use_container_width=True):
                 try:
-                    with st.spinner("Aperçu…"):
-                        png = document_to_png_bytes(source, zoom=1.1)
-                    st.session_state[f"tpl_preview_{template.id}"] = png
+                    bundled = static_template_preview_path(template.id)
+                    if bundled is not None:
+                        st.session_state[f"tpl_preview_{template.id}"] = bundled.read_bytes()
+                    else:
+                        with st.spinner("Aperçu (LibreOffice, première fois)…"):
+                            st.session_state[f"tpl_preview_{template.id}"] = cached_document_preview(
+                                source, zoom=1.1
+                            )
                 except Exception as exc:
                     st.warning(f"Aperçu indisponible : {exc}")
         if f"tpl_preview_{template.id}" in st.session_state:
@@ -1033,19 +1131,20 @@ def _render_generated_tab() -> None:
                 if path.suffix.lower() == ".pdf"
                 else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
-            st.download_button(
-                "Télécharger",
-                data=path.read_bytes(),
+            _offer_file(
+                "Ouvrir" if _is_desktop() else "Télécharger",
+                path=path,
                 file_name=path.name,
                 mime=mime,
                 key=f"dl_gen_{path.name}",
-                use_container_width=True,
             )
         with c2:
             if st.button("Aperçu", key=f"prev_gen_{path.name}", use_container_width=True):
                 try:
                     with st.spinner("Aperçu…"):
-                        st.session_state[f"gen_preview_{path.name}"] = document_to_png_bytes(path, zoom=1.1)
+                        st.session_state[f"gen_preview_{path.name}"] = cached_document_preview(
+                            path, zoom=1.1
+                        )
                 except Exception as exc:
                     st.warning(f"Aperçu indisponible : {exc}")
         if f"gen_preview_{path.name}" in st.session_state:
