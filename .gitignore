@@ -21,3 +21,8 @@ generated_certificates/
 .idea/
 .vscode/
 *.log
+
+# Large Windows installers (use redist/download_redist.bat)
+redist/*.exe
+redist/*.msi
+redist/*.partial

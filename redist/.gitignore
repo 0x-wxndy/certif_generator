@@ -1,0 +1,8 @@
+# Redistribuables Windows (hors Git — trop volumineux)
+redist/*.exe
+redist/*.msi
+redist/*.msix
+redist/*.zip
+!redist/download_redist.bat
+!redist/install_redist.bat
+!redist/README.txt
