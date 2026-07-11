@@ -365,15 +365,15 @@ def _iter_paragraphs(doc: Document):
 
 
 def _enlarge_appreciation_text(doc: Document) -> None:
-    """Appreciation text is short — bump body/name sizes for better presence."""
+    """Slight bump only — Amiri/LO must still fit on a single landscape page."""
     for paragraph in _iter_paragraphs(doc):
         text = paragraph.text.strip()
         if not text:
             continue
         if text.startswith("شهادة"):
             continue
-        # Name line + body paragraphs (template body is ~32 half-points).
-        _bump_runs_at_most(paragraph, max_half_points=36, new_half_points=42)
+        # Template body is ~32 half-points; keep bump modest (was 42 → 2 pages).
+        _bump_runs_at_most(paragraph, max_half_points=34, new_half_points=36)
 
 
 def _enlarge_congratulations_fields(doc: Document, recipient_title: str, council_location: str) -> None:
@@ -468,21 +468,51 @@ def _strip_run_italic(run) -> None:
             rPr.remove(node)
 
 
-def _fix_arabic_pdf_fonts(doc: Document) -> str:
-    """
-    Make Arabic runs PDF-safe for LibreOffice.
+def _run_is_italic(run) -> bool:
+    from docx.oxml.ns import qn
 
-    Windows LO often renders italic Arial Arabic as empty rectangles (tofu).
-    Remap to a bundled Arabic font and drop italic on Arabic text.
+    if run.font.italic:
+        return True
+    rPr = run._element.find(qn("w:rPr"))
+    if rPr is None:
+        return False
+    return rPr.find(qn("w:i")) is not None or rPr.find(qn("w:iCs")) is not None
+
+
+def _fix_arabic_pdf_fonts(doc: Document, *, size_scale: float = 1.0) -> str:
+    """
+    Make Arabic runs PDF-safe for LibreOffice without blowing up layout.
+
+    Only italic Arabic is remapped (Arial Italic → tofu □□□ in LO PDF).
+    Non-italic Arial Arabic already renders fine and stays compact on one page.
     """
     font_name = _best_arabic_font()
     for paragraph in _iter_paragraphs(doc):
         for run in paragraph.runs:
             if not run.text or not _contains_arabic(run.text):
                 continue
+            if not _run_is_italic(run):
+                continue
             _strip_run_italic(run)
-            _set_run_font(run, font_name)
+            _set_run_font(run, font_name, size_scale=size_scale)
     return font_name
+
+
+def _set_line_spacing(doc: Document, line: int = 276) -> None:
+    """Set paragraph line spacing (240 = single, 276 ≈ 1.15, 288 = 1.2)."""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    for paragraph in doc.paragraphs:
+        if not paragraph.text.strip():
+            continue
+        pPr = paragraph._element.get_or_add_pPr()
+        spacing = pPr.find(qn("w:spacing"))
+        if spacing is None:
+            spacing = OxmlElement("w:spacing")
+            pPr.append(spacing)
+        spacing.set(qn("w:line"), str(line))
+        spacing.set(qn("w:lineRule"), "auto")
 
 
 def _set_run_font(run, font_name: str, size_scale: float = 1.0) -> None:
@@ -668,13 +698,18 @@ def generate_docx_certificate(
         doc = Document(str(output_path))
         if template_id == "appreciation":
             _enlarge_appreciation_text(doc)
-            _fix_arabic_pdf_fonts(doc)
+            # Only fix italic seal line — full Amiri remap made the cert 2 pages.
+            _fix_arabic_pdf_fonts(doc, size_scale=0.9)
+            _tighten_paragraph_spacing(doc)
             doc.save(str(output_path))
         elif template_id in {"condolence_individual", "condolence_family", "congratulations"}:
             # Scheherazade is taller than Arabic Typesetting — shrink condolence
             # so the letter stays on a single page.
             scale = 0.65 if template_id.startswith("condolence") else 0.9
             _ensure_renderable_arabic_fonts(doc, size_scale=scale)
+            if template_id.startswith("condolence"):
+                # Slightly roomier lines after the compact font pass (not too much).
+                _set_line_spacing(doc, line=276)
             if template_id == "congratulations":
                 _enlarge_congratulations_fields(
                     doc,
@@ -697,6 +732,7 @@ def generate_docx_certificate(
 
     if template_id.startswith("condolence"):
         _ensure_renderable_arabic_fonts(doc, size_scale=0.65)
+        _set_line_spacing(doc, line=276)
     elif template_id == "congratulations":
         _ensure_renderable_arabic_fonts(doc, size_scale=0.9)
 
@@ -1115,8 +1151,10 @@ def _terminate_libreoffice_processes() -> None:
 def docx_to_pdf_bytes(docx_path: str | Path) -> bytes:
     """Convert a DOCX to PDF bytes via LibreOffice.
 
-    Uses an isolated UserInstallation profile so Windows conversions do not hang
-    on a locked default profile / recovery dialog.
+    Optimizations:
+    - Disk cache keyed by source mtime (instant on repeat)
+    - Persistent LibreOffice user profile (avoids cold-start every call)
+    - Light italic-Arabic patch only (no full font remap)
     """
     import os
     import shutil
@@ -1128,92 +1166,98 @@ def docx_to_pdf_bytes(docx_path: str | Path) -> bytes:
     if not docx_path.exists():
         raise FileNotFoundError(f"DOCX not found: {docx_path}")
 
+    PREVIEW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    st = docx_path.stat()
+    cache_pdf = PREVIEW_CACHE_DIR / f"{docx_path.stem}_{int(st.st_mtime)}_{st.st_size}.pdf"
+    if cache_pdf.exists() and cache_pdf.stat().st_size > 0:
+        return cache_pdf.read_bytes()
+
     fonts_dir = BASE_DIR / "fonts"
     env = os.environ.copy()
     if fonts_dir.exists():
         existing = env.get("SAL_FONTPATH", "")
         env["SAL_FONTPATH"] = str(fonts_dir) if not existing else f"{fonts_dir}{os.pathsep}{existing}"
-    # Avoid interactive prompts / first-run noise in headless mode.
     env.setdefault("SAL_NO_NAG_DIALOGS", "1")
 
     soffice = _libreoffice_command()
-    profile_root = Path(tempfile.mkdtemp(prefix="lo_profile_"))
-    try:
-        with tempfile.TemporaryDirectory(prefix="cert_pdf_") as tmp:
-            tmp_dir = Path(tmp)
-            # Work on a local copy — avoids locks on Desktop / OneDrive paths.
-            work_docx = tmp_dir / docx_path.name
-            shutil.copy2(docx_path, work_docx)
-            # Patch Arabic italic/Arial before convert — LO PDF otherwise shows tofu □□□.
+    # Reuse one profile — creating a fresh profile each convert is the main slowdown.
+    profile_root = WRITE_DIR / ".lo_user_profile"
+    profile_root.mkdir(parents=True, exist_ok=True)
+    profile_uri = profile_root.resolve().as_uri()
+
+    with tempfile.TemporaryDirectory(prefix="cert_pdf_") as tmp:
+        tmp_dir = Path(tmp)
+        work_docx = tmp_dir / docx_path.name
+        shutil.copy2(docx_path, work_docx)
+        # Cheap tofu fix: only italic Arabic runs (body Arial stays as-is).
+        try:
+            doc = Document(str(work_docx))
+            _fix_arabic_pdf_fonts(doc, size_scale=0.9)
+            doc.save(str(work_docx))
+        except Exception:
+            pass
+
+        cmd = [
+            soffice,
+            "--headless",
+            "--nologo",
+            "--norestore",
+            "--nofirststartwizard",
+            "--nolockcheck",
+            f"-env:UserInstallation={profile_uri}",
+            "--convert-to",
+            "pdf:writer_pdf_Export",
+            "--outdir",
+            str(tmp_dir),
+            str(work_docx.resolve()),
+        ]
+
+        run_kwargs: dict = {
+            "capture_output": True,
+            "text": True,
+            "timeout": 120,
+            "check": False,
+            "env": env,
+            "cwd": str(tmp_dir),
+        }
+        if os.name == "nt":
+            run_kwargs["creationflags"] = getattr(
+                subprocess, "CREATE_NO_WINDOW", 0
+            ) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
+        last_error = ""
+        for attempt in range(2):
             try:
-                doc = Document(str(work_docx))
-                _fix_arabic_pdf_fonts(doc)
-                doc.save(str(work_docx))
-            except Exception:
-                pass
-
-            profile_uri = profile_root.resolve().as_uri()
-            cmd = [
-                soffice,
-                "--headless",
-                "--invisible",
-                "--nologo",
-                "--norestore",
-                "--nofirststartwizard",
-                "--nolockcheck",
-                "--nodefault",
-                f"-env:UserInstallation={profile_uri}",
-                "--convert-to",
-                "pdf:writer_pdf_Export",
-                "--outdir",
-                str(tmp_dir),
-                str(work_docx.resolve()),
-            ]
-
-            run_kwargs: dict = {
-                "capture_output": True,
-                "text": True,
-                "timeout": 180,
-                "check": False,
-                "env": env,
-                "cwd": str(tmp_dir),
-            }
-            if os.name == "nt":
-                run_kwargs["creationflags"] = getattr(
-                    subprocess, "CREATE_NO_WINDOW", 0
-                ) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-
-            last_error = ""
-            for attempt in range(2):
-                try:
-                    result = subprocess.run(cmd, **run_kwargs)
-                except subprocess.TimeoutExpired:
-                    _terminate_libreoffice_processes()
-                    last_error = "LibreOffice a dépassé le délai (180 s)"
-                    if attempt == 0:
-                        time.sleep(1.5)
-                        continue
-                    raise RuntimeError(
-                        "Conversion DOCX → PDF échouée : délai dépassé. "
-                        "Fermez LibreOffice s'il est ouvert, puis réessayez."
-                    ) from None
-
-                pdf_path = tmp_dir / f"{work_docx.stem}.pdf"
-                if result.returncode == 0 and pdf_path.exists():
-                    return pdf_path.read_bytes()
-
-                last_error = (result.stderr or result.stdout or "").strip()
-                # Retry once after clearing hung soffice processes.
+                result = subprocess.run(cmd, **run_kwargs)
+            except subprocess.TimeoutExpired:
+                _terminate_libreoffice_processes()
+                last_error = "LibreOffice a dépassé le délai (120 s)"
                 if attempt == 0:
-                    _terminate_libreoffice_processes()
-                    time.sleep(1.5)
+                    time.sleep(0.4)
                     continue
+                raise RuntimeError(
+                    "Conversion DOCX → PDF échouée : délai dépassé. "
+                    "Fermez LibreOffice s'il est ouvert, puis réessayez."
+                ) from None
 
-            raise RuntimeError(
-                f"Conversion DOCX → PDF échouée: {last_error or 'LibreOffice error'}"
-            )
-    finally:
-        shutil.rmtree(profile_root, ignore_errors=True)
+            pdf_path = tmp_dir / f"{work_docx.stem}.pdf"
+            if result.returncode == 0 and pdf_path.exists():
+                pdf_bytes = pdf_path.read_bytes()
+                try:
+                    cache_pdf.write_bytes(pdf_bytes)
+                except OSError:
+                    pass
+                return pdf_bytes
+
+            last_error = (result.stderr or result.stdout or "").strip()
+            if attempt == 0:
+                _terminate_libreoffice_processes()
+                time.sleep(0.4)
+                continue
+
+        raise RuntimeError(
+            f"Conversion DOCX → PDF échouée: {last_error or 'LibreOffice error'}"
+        )
 
 
 def pdf_bytes_to_png_bytes(pdf_bytes: bytes, zoom: float = 1.3) -> bytes:
