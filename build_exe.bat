@@ -37,7 +37,7 @@ echo.
 ".venv\Scripts\pyinstaller.exe" --noconfirm --clean ^
   --name GenerateurCertificats ^
   --onedir ^
-  --console ^
+  --windowed ^
   --add-data "certificate_ui.py;." ^
   --add-data "certificate_generator.py;." ^
   --add-data "requirements.txt;." ^
@@ -49,6 +49,7 @@ echo.
   --hidden-import streamlit ^
   --hidden-import streamlit.web.cli ^
   --hidden-import streamlit.runtime.scriptrunner.magic_funcs ^
+  --hidden-import webview ^
   --hidden-import docx ^
   --hidden-import docxtpl ^
   --hidden-import openpyxl ^
@@ -57,6 +58,7 @@ echo.
   --hidden-import bidi ^
   --collect-all streamlit ^
   --collect-all altair ^
+  --collect-all webview ^
   --collect-all docxtpl ^
   --collect-all arabic_reshaper ^
   run_desktop.py
@@ -69,9 +71,10 @@ if errorlevel 1 (
 )
 
 echo.
-echo OK - Executable:
+echo OK - Executable (fenetre native, sans CMD):
 echo   dist\GenerateurCertificats\GenerateurCertificats.exe
 echo.
 echo Note: LibreOffice doit rester installe sur le PC pour l'apercu / PDF.
+echo Fermer la fenetre de l'app = arreter l'application.
 echo.
 pause
