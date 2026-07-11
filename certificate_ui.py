@@ -835,11 +835,22 @@ def _render_preview_panel() -> None:
                     key="preview_download_docx",
                 )
             with tool_col3:
-                # Do not auto-convert on every rerun — only when the user asks.
-                if result.get("pdf_bytes") and result.get("pdf_name") == pdf_name:
+                # Save PDF next to the DOCX in generated_certificates/
+                pdf_path = Path(result["path"]).with_suffix(".pdf")
+                if result.get("pdf_path"):
+                    candidate = Path(result["pdf_path"])
+                    if candidate.exists():
+                        pdf_path = candidate
+
+                if pdf_path.exists():
+                    result["pdf_path"] = str(pdf_path)
+                    result["pdf_name"] = pdf_name
+                    if "pdf_bytes" not in result:
+                        result["pdf_bytes"] = pdf_path.read_bytes()
+                    st.session_state.last_result = result
                     _offer_file(
-                        "Télécharger PDF",
-                        data=result["pdf_bytes"],
+                        "Ouvrir PDF" if _is_desktop() else "Télécharger PDF",
+                        path=pdf_path,
                         file_name=pdf_name,
                         mime="application/pdf",
                         key="preview_download_pdf",
@@ -847,11 +858,15 @@ def _render_preview_panel() -> None:
                 elif st.button("Convertir en PDF", key="preview_make_pdf", use_container_width=True):
                     try:
                         with st.spinner("Conversion PDF (LibreOffice)…"):
-                            result["pdf_bytes"] = docx_to_pdf_bytes(result["path"])
+                            pdf_bytes = docx_to_pdf_bytes(result["path"])
+                            pdf_path.write_bytes(pdf_bytes)
+                            result["pdf_bytes"] = pdf_bytes
                             result["pdf_name"] = pdf_name
+                            result["pdf_path"] = str(pdf_path)
                             result.pop("preview_png", None)
                             result.pop("preview_zoom", None)
                             st.session_state.last_result = result
+                        st.success(f"PDF enregistré dans generated_certificates\\{pdf_path.name}")
                         st.rerun()
                     except Exception as exc:
                         st.error(f"PDF indisponible : {exc}")

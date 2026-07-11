@@ -98,9 +98,9 @@ def _default_arabic_fonts() -> tuple[str, str]:
 
 ARABIC_FONT, ARABIC_FONT_BOLD = _default_arabic_fonts()
 PREFERRED_ARABIC_FONTS = (
-    "Arabic Typesetting",
-    "Scheherazade New",
     "Amiri",
+    "Scheherazade New",
+    "Arabic Typesetting",
     "Noto Naskh Arabic",
     "DejaVu Sans",
 )
@@ -397,6 +397,40 @@ def _docx_uses_jinja(source: Path) -> bool:
 
 
 def _font_available(family: str) -> bool:
+    """True if the font can be used for DOCX → PDF (bundled, system, or fc-list)."""
+    import os
+
+    bundled = {
+        "Amiri": BASE_DIR / "fonts" / "Amiri-Regular.ttf",
+        "Scheherazade New": BASE_DIR / "fonts" / "ScheherazadeNew-Regular.ttf",
+        "DejaVu Sans": Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+    }
+    bundled_path = bundled.get(family)
+    if bundled_path is not None and bundled_path.exists():
+        return True
+
+    if os.name == "nt":
+        windir = Path(os.environ.get("WINDIR", r"C:\Windows"))
+        fonts_dir = windir / "Fonts"
+        aliases = {
+            "Amiri": ("amiri-regular.ttf", "amiri.ttf"),
+            "Scheherazade New": ("scheherazadenew-regular.ttf", "scheherazade new.ttf"),
+            "Arabic Typesetting": ("arabtype.ttf",),
+            "Noto Naskh Arabic": ("notonaskharabic-regular.ttf", "NotoNaskhArabic-Regular.ttf"),
+            "DejaVu Sans": ("dejavusans.ttf",),
+        }
+        for name in aliases.get(family, ()):
+            if (fonts_dir / name).exists():
+                return True
+        # Case-insensitive scan for family token.
+        token = family.lower().replace(" ", "")
+        try:
+            for entry in fonts_dir.iterdir():
+                if token in entry.name.lower().replace(" ", ""):
+                    return True
+        except OSError:
+            pass
+
     import subprocess
 
     try:
@@ -415,7 +449,40 @@ def _best_arabic_font() -> str:
     for family in PREFERRED_ARABIC_FONTS:
         if _font_available(family):
             return family
-    return "DejaVu Sans"
+    return "Amiri"
+
+
+def _contains_arabic(text: str) -> bool:
+    return any("\u0600" <= ch <= "\u06FF" for ch in text)
+
+
+def _strip_run_italic(run) -> None:
+    """Remove italic flags — Arial Italic has no Arabic glyphs in LibreOffice PDF."""
+    from docx.oxml.ns import qn
+
+    run.font.italic = False
+    rPr = run._element.get_or_add_rPr()
+    for tag in ("i", "iCs"):
+        node = rPr.find(qn(f"w:{tag}"))
+        if node is not None:
+            rPr.remove(node)
+
+
+def _fix_arabic_pdf_fonts(doc: Document) -> str:
+    """
+    Make Arabic runs PDF-safe for LibreOffice.
+
+    Windows LO often renders italic Arial Arabic as empty rectangles (tofu).
+    Remap to a bundled Arabic font and drop italic on Arabic text.
+    """
+    font_name = _best_arabic_font()
+    for paragraph in _iter_paragraphs(doc):
+        for run in paragraph.runs:
+            if not run.text or not _contains_arabic(run.text):
+                continue
+            _strip_run_italic(run)
+            _set_run_font(run, font_name)
+    return font_name
 
 
 def _set_run_font(run, font_name: str, size_scale: float = 1.0) -> None:
@@ -601,6 +668,7 @@ def generate_docx_certificate(
         doc = Document(str(output_path))
         if template_id == "appreciation":
             _enlarge_appreciation_text(doc)
+            _fix_arabic_pdf_fonts(doc)
             doc.save(str(output_path))
         elif template_id in {"condolence_individual", "condolence_family", "congratulations"}:
             # Scheherazade is taller than Arabic Typesetting — shrink condolence
@@ -1076,6 +1144,13 @@ def docx_to_pdf_bytes(docx_path: str | Path) -> bytes:
             # Work on a local copy — avoids locks on Desktop / OneDrive paths.
             work_docx = tmp_dir / docx_path.name
             shutil.copy2(docx_path, work_docx)
+            # Patch Arabic italic/Arial before convert — LO PDF otherwise shows tofu □□□.
+            try:
+                doc = Document(str(work_docx))
+                _fix_arabic_pdf_fonts(doc)
+                doc.save(str(work_docx))
+            except Exception:
+                pass
 
             profile_uri = profile_root.resolve().as_uri()
             cmd = [
