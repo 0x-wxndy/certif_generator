@@ -1,0 +1,32 @@
+Générateur de certificats — Windows
+===================================
+
+Lancement
+---------
+  Double-cliquez : GenerateurCertificats.exe
+
+Par défaut l'interface s'ouvre dans Microsoft Edge / le navigateur.
+C'est le mode le plus fiable sur tous les PC Windows.
+
+Une petite boîte de dialogue reste ouverte :
+  cliquez OK pour FERMER l'application.
+
+Prérequis (une fois par PC)
+---------------------------
+  Lancez redist\install_redist.bat
+  (VC++ Redistributable + LibreOffice + WebView2)
+
+Après copie / ZIP depuis un autre PC
+------------------------------------
+  1. Lancez debloquer_dll.bat
+  2. Puis GenerateurCertificats.exe
+
+Fenêtre native (optionnel)
+--------------------------
+  Créez un fichier vide nommé :
+    fenetre_native.on
+  à côté de GenerateurCertificats.exe
+  Puis relancez (nécessite WebView2).
+
+  Ou définissez la variable d'environnement :
+    CERT_UI_MODE=native

@@ -20,12 +20,16 @@ set "PY_FILE=python-3.12.10-amd64.exe"
 set "VC_URL=https://aka.ms/vs/17/release/vc_redist.x64.exe"
 set "VC_FILE=VC_redist.x64.exe"
 
+set "WV_URL=https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+set "WV_FILE=MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
+
 set "LO_VER=26.2.4"
 set "LO_FILE=LibreOffice_%LO_VER%_Win_x86-64.msi"
 set "LO_URL=https://download.documentfoundation.org/libreoffice/stable/%LO_VER%/win/x86_64/%LO_FILE%"
 
 call :download "%PY_URL%" "%PY_FILE%"
 call :download "%VC_URL%" "%VC_FILE%"
+call :download "%WV_URL%" "%WV_FILE%"
 call :download "%LO_URL%" "%LO_FILE%"
 
 echo.

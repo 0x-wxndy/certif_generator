@@ -160,15 +160,18 @@ if not exist "dist\GenerateurCertificats\GenerateurCertificats.exe" (
 )
 
 copy /Y "debloquer_dll.bat" "dist\GenerateurCertificats\debloquer_dll.bat" >nul 2>nul
+copy /Y "LIREMOI_WINDOWS.txt" "dist\GenerateurCertificats\LIREMOI_WINDOWS.txt" >nul 2>nul
 
 echo.
 echo ============================================================
 echo  OK
 echo  Lancez: dist\GenerateurCertificats\GenerateurCertificats.exe
 echo.
+echo  Mode par defaut: NAVIGATEUR (fiable sur tous les PC).
 echo  Sur un autre PC apres copie/ZIP:
-echo    1) debloquer_dll.bat  (une fois)
-echo    2) GenerateurCertificats.exe
+echo    1) redist\install_redist.bat
+echo    2) debloquer_dll.bat
+echo    3) GenerateurCertificats.exe
 echo ============================================================
 echo.
 explorer "dist\GenerateurCertificats"

@@ -247,7 +247,108 @@ def _prepare_pythonnet_runtime() -> None:
         _log(f"pythonnet coreclr unavailable, using default: {exc}")
 
 
+def _show_info(message: str) -> None:
+    _log(message.replace("\n", " | "))
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(
+                0,
+                message,
+                "Générateur de certificats",
+                0x40,
+            )
+            return
+        except Exception:
+            pass
+    try:
+        input(message + "\nAppuyez sur Entrée…")
+    except Exception:
+        pass
+
+
+def _ui_mode() -> str:
+    """
+    browser = Edge/Chrome (default — works on virtually any Windows PC)
+    native  = pywebview window (needs WebView2 + unblocked DLLs)
+    """
+    explicit = os.environ.get("CERT_UI_MODE", "").strip().lower()
+    if explicit in {"browser", "native", "auto"}:
+        return explicit
+    if (_exe_dir() / "fenetre_native.on").exists():
+        return "native"
+    # Default: browser — white native windows are too common across PCs.
+    return "browser"
+
+
+def _webview2_installed() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        import winreg
+    except ImportError:
+        return False
+
+    keys = (
+        r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+        r"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+    )
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        for key in keys:
+            try:
+                with winreg.OpenKey(hive, key) as handle:
+                    version, _ = winreg.QueryValueEx(handle, "pv")
+                    if version and version != "0.0.0.0":
+                        return True
+            except OSError:
+                continue
+    # Edge often bundles WebView2.
+    edge = Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")) / "Microsoft" / "Edge" / "Application"
+    return edge.exists()
+
+
+def _open_in_browser(port: int) -> None:
+    url = f"http://127.0.0.1:{port}/"
+    # Prefer Edge if present (closest to WebView2), else default browser.
+    if os.name == "nt":
+        edge = Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")) / "Microsoft" / "Edge" / "Application" / "msedge.exe"
+        if not edge.exists():
+            edge = Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "Microsoft" / "Edge" / "Application" / "msedge.exe"
+        if edge.exists():
+            try:
+                subprocess.Popen(
+                    [str(edge), f"--new-window", url],
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                _log(f"Opened Edge: {url}")
+                return
+            except Exception as exc:
+                _log(f"Edge launch failed: {exc}")
+    webbrowser.open(url)
+    _log(f"Opened system browser: {url}")
+
+
+def _run_browser_ui(port: int, child: subprocess.Popen | None) -> int:
+    """Most compatible UI path for Windows deployments."""
+    # Extra beat so Streamlit websocket/session is fully up before the browser hits it.
+    time.sleep(1.2)
+    _open_in_browser(port)
+    _show_info(
+        "L'application est ouverte dans votre navigateur.\n\n"
+        f"Adresse: http://127.0.0.1:{port}/\n\n"
+        "Travaillez dans le navigateur.\n"
+        "Cliquez sur OK ici pour FERMER l'application."
+    )
+    _log("Browser UI session ended by user")
+    return 0
+
+
 def _open_desktop_window(port: int) -> bool:
+    if not _webview2_installed():
+        _log("WebView2 Runtime introuvable — native window skipped")
+        return False
+
     _unblock_packaged_dlls()
     _prepare_pythonnet_runtime()
 
@@ -257,10 +358,12 @@ def _open_desktop_window(port: int) -> bool:
         _log("pywebview not installed - falling back to browser")
         return False
 
-    url = f"http://127.0.0.1:{port}"
+    url = f"http://127.0.0.1:{port}/"
+    storage = _exe_dir() / ".webview_data"
+    storage.mkdir(parents=True, exist_ok=True)
     _log(f"Opening desktop window: {url}")
+
     try:
-        # Streamlit download_button needs this — disabled by default in pywebview.
         webview.settings["ALLOW_DOWNLOADS"] = True
         webview.create_window(
             title="وزارة العدل — Générateur de certificats",
@@ -269,7 +372,13 @@ def _open_desktop_window(port: int) -> bool:
             height=900,
             min_size=(960, 640),
         )
-        webview.start()
+
+        # Give Streamlit a moment after HTTP-ready before the WebView paints.
+        time.sleep(1.0)
+        try:
+            webview.start(storage_path=str(storage), private_mode=False)
+        except TypeError:
+            webview.start()
         return True
     except Exception:
         _log("pywebview failed:\n" + traceback.format_exc())
@@ -416,43 +525,26 @@ def main() -> int:
                 return 1
             _log("Streamlit app is ready")
 
-        opened = False
-        try:
-            opened = _open_desktop_window(port)
-        except Exception:
-            _log("desktop window raised:\n" + traceback.format_exc())
+        mode = _ui_mode()
+        _log(f"UI mode: {mode}")
+
+        use_native = mode == "native" or (
+            mode == "auto" and _webview2_installed()
+        )
+        if use_native:
             opened = False
+            try:
+                opened = _open_desktop_window(port)
+            except Exception:
+                _log("desktop window raised:\n" + traceback.format_exc())
+                opened = False
+            if opened:
+                _log("Window closed — shutting down")
+                return 0
+            _log("Native window unavailable — falling back to browser")
 
-        if not opened:
-            url = f"http://127.0.0.1:{port}"
-            webbrowser.open(url)
-            _log(f"Opened system browser fallback: {url}")
-            if os.name == "nt":
-                try:
-                    import ctypes
-
-                    ctypes.windll.user32.MessageBoxW(
-                        0,
-                        "La fenêtre intégrée n'a pas pu démarrer (pythonnet / WebView).\n\n"
-                        "L'application s'ouvre dans le navigateur à la place.\n\n"
-                        "Astuce livraison: après copie/ZIP, clic droit sur le dossier "
-                        "ou le ZIP → Propriétés → Débloquer, puis réessayez.\n"
-                        "Installez aussi « WebView2 Runtime » et VC++ Redistributable.",
-                        "Générateur de certificats",
-                        0x40,
-                    )
-                except Exception:
-                    pass
-            if child is not None:
-                return int(child.wait() or 0)
-            _show_error(
-                "Impossible d'ouvrir l'interface.\n"
-                "Vérifiez generateur_certificats.log"
-            )
-            return 1
-
-        _log("Window closed — shutting down")
-        return 0
+        # Default / fallback: system browser (most reliable on any Windows PC).
+        return _run_browser_ui(port, child)
     except Exception as exc:
         _show_error(f"Erreur au démarrage:\n{exc}")
         return 1
