@@ -13,6 +13,7 @@ import streamlit as st
 
 from certificate_generator import (
     BASE_DIR,
+    BULK_DIR,
     OUTPUT_DIR,
     TEMPLATES_DIR,
     build_excel_template_bytes,
@@ -26,7 +27,6 @@ from certificate_generator import (
 )
 
 ASSETS_DIR = BASE_DIR / "assets"
-BULK_DIR = BASE_DIR / "bulk_templates"
 EMBLEM_PATH = ASSETS_DIR / "Peoples-Democratic-Republic-of-Algeria.png"
 FLAG_PATH = ASSETS_DIR / "algerie_flag.png"
 MINISTRY_SVG = ASSETS_DIR / "وزارة_العدل_الجزائر.svg"

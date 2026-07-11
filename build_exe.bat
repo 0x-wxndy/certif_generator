@@ -47,6 +47,8 @@ echo.
   --add-data "certificates templates;certificates templates" ^
   --add-data "bulk_templates;bulk_templates" ^
   --hidden-import streamlit ^
+  --hidden-import streamlit.web.cli ^
+  --hidden-import streamlit.runtime.scriptrunner.magic_funcs ^
   --hidden-import docx ^
   --hidden-import docxtpl ^
   --hidden-import openpyxl ^
@@ -54,6 +56,7 @@ echo.
   --hidden-import arabic_reshaper ^
   --hidden-import bidi ^
   --collect-all streamlit ^
+  --collect-all altair ^
   --collect-all docxtpl ^
   --collect-all arabic_reshaper ^
   run_desktop.py
